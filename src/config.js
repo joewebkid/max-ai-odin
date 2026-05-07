@@ -1,0 +1,231 @@
+import path from 'node:path';
+import 'dotenv/config';
+
+const SUPPORTED_API_MODES = new Set(['backend-api', 'openai', 'cryptosmi']);
+const SUPPORTED_BACKENDS = new Set(['g4f', 'codex']);
+const DEFAULT_TARIFFS = [
+  {
+    id: 'starter',
+    name: 'Старт',
+    description: 'Для редких обращений и тестов.',
+    priceText: '0 ₽',
+    monthlyTokens: 50_000,
+    isPublic: true,
+  },
+  {
+    id: 'plus',
+    name: 'Плюс',
+    description: 'Для ежедневной работы с ботом.',
+    priceText: '990 ₽',
+    monthlyTokens: 300_000,
+    isPublic: true,
+  },
+  {
+    id: 'pro',
+    name: 'Про',
+    description: 'Для активного использования и длинных диалогов.',
+    priceText: '3 990 ₽',
+    monthlyTokens: 1_500_000,
+    isPublic: true,
+  },
+];
+
+function parsePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(value ?? '', 10);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return parsed;
+}
+
+function parseBoolean(value, fallback = false) {
+  if (value == null || value === '') {
+    return fallback;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  return fallback;
+}
+
+function parseNonNegativeInt(value, fallback) {
+  const parsed = Number.parseInt(value ?? '', 10);
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+
+  return parsed;
+}
+
+function trimTrailingSlashes(value) {
+  return value.replace(/\/+$/, '');
+}
+
+function buildApiConfig(prefix, defaults = {}) {
+  return {
+    baseUrl: trimTrailingSlashes((process.env[`${prefix}_BASE_URL`] ?? '').trim()),
+    mode: (process.env[`${prefix}_API_MODE`] ?? defaults.mode ?? 'backend-api').trim(),
+    apiKey: (process.env[`${prefix}_API_KEY`] ?? '').trim(),
+    model: (process.env[`${prefix}_MODEL`] ?? defaults.model ?? 'gpt-4o-mini').trim(),
+    provider: (process.env[`${prefix}_PROVIDER`] ?? '').trim(),
+    generatePath: (process.env[`${prefix}_GENERATE_PATH`] ?? defaults.generatePath ?? '/generate').trim() || '/generate',
+    useResponses: parseBoolean(process.env[`${prefix}_USE_RESPONSES`], defaults.useResponses ?? false),
+  };
+}
+
+function normalizeTariff(rawTariff, index) {
+  const fallback = DEFAULT_TARIFFS[index] ?? DEFAULT_TARIFFS[0];
+  const id = String(rawTariff?.id ?? fallback.id).trim().toLowerCase();
+
+  if (!id) {
+    throw new Error(`Invalid tariff config at index ${index}: missing id`);
+  }
+
+  return {
+    id,
+    name: String(rawTariff?.name ?? fallback.name).trim() || fallback.name,
+    description: String(rawTariff?.description ?? fallback.description ?? '').trim(),
+    priceText: String(rawTariff?.priceText ?? fallback.priceText ?? '').trim(),
+    monthlyTokens: parseNonNegativeInt(rawTariff?.monthlyTokens, fallback.monthlyTokens),
+    isPublic: rawTariff?.isPublic !== false,
+  };
+}
+
+function parseTariffs(value) {
+  if (!value?.trim()) {
+    return DEFAULT_TARIFFS;
+  }
+
+  let parsed;
+
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    throw new Error(`Invalid TARIFFS_JSON: ${error.message}`);
+  }
+
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error('TARIFFS_JSON must be a non-empty JSON array');
+  }
+
+  const tariffs = parsed.map((tariff, index) => normalizeTariff(tariff, index));
+  const ids = new Set();
+
+  for (const tariff of tariffs) {
+    if (ids.has(tariff.id)) {
+      throw new Error(`Duplicate tariff id in TARIFFS_JSON: ${tariff.id}`);
+    }
+
+    ids.add(tariff.id);
+  }
+
+  return tariffs;
+}
+
+const tariffs = parseTariffs(process.env.TARIFFS_JSON ?? '');
+const defaultTariffId = (process.env.DEFAULT_TARIFF_ID ?? tariffs[0]?.id ?? 'starter').trim().toLowerCase();
+
+export const config = {
+  maxBotToken: (process.env.MAX_BOT_TOKEN ?? '').trim(),
+  systemPrompt: (process.env.SYSTEM_PROMPT ?? '').trim() || 'Ты полезный русскоязычный ассистент.',
+  maxHistoryMessages: parsePositiveInt(process.env.MAX_HISTORY_MESSAGES, 12),
+  requestTimeoutMs: parsePositiveInt(process.env.REQUEST_TIMEOUT_MS ?? process.env.G4F_TIMEOUT_MS, 60_000),
+  metricsFile: path.resolve(process.cwd(), (process.env.METRICS_FILE ?? 'data/bot-metrics.json').trim() || 'data/bot-metrics.json'),
+  recentRequestsLimit: parsePositiveInt(process.env.RECENT_REQUESTS_LIMIT, 200),
+  tokenCycleDays: parsePositiveInt(process.env.TOKEN_CYCLE_DAYS, 30),
+  defaultBackend: (process.env.DEFAULT_BACKEND ?? 'g4f').trim().toLowerCase(),
+  tariffs,
+  defaultTariffId,
+  g4f: buildApiConfig('G4F', {
+    mode: 'backend-api',
+    model: 'gpt-4o-mini',
+    generatePath: '/generate',
+  }),
+  codex: buildApiConfig('CODEX', {
+    mode: 'openai',
+    model: 'gpt-5.3-codex',
+    generatePath: '/generate',
+    useResponses: true,
+  }),
+  codexSessionFile: path.resolve(
+    process.cwd(),
+    (process.env.CODEX_SESSION_FILE ?? 'data/codex-sessions.json').trim() || 'data/codex-sessions.json',
+  ),
+  admin: {
+    host: (process.env.ADMIN_HOST ?? '127.0.0.1').trim() || '127.0.0.1',
+    port: parsePositiveInt(process.env.ADMIN_PORT, 3477),
+    username: (process.env.ADMIN_USERNAME ?? 'admin').trim() || 'admin',
+    password: (process.env.ADMIN_PASSWORD ?? '').trim(),
+  },
+};
+
+export function validateConfig() {
+  const missing = [];
+
+  if (!config.maxBotToken) {
+    missing.push('MAX_BOT_TOKEN');
+  }
+
+  if (!config.g4f.baseUrl) {
+    missing.push('G4F_BASE_URL');
+  }
+
+  if (!config.codex.baseUrl) {
+    missing.push('CODEX_BASE_URL');
+  }
+
+  if (missing.length > 0) {
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  }
+
+  if (!SUPPORTED_BACKENDS.has(config.defaultBackend)) {
+    throw new Error(
+      `Unsupported DEFAULT_BACKEND "${config.defaultBackend}". Use one of: ${Array.from(SUPPORTED_BACKENDS).join(', ')}`,
+    );
+  }
+
+  if (!SUPPORTED_API_MODES.has(config.g4f.mode)) {
+    throw new Error(
+      `Unsupported G4F_API_MODE "${config.g4f.mode}". Use one of: ${Array.from(SUPPORTED_API_MODES).join(', ')}`,
+    );
+  }
+
+  if (!SUPPORTED_API_MODES.has(config.codex.mode)) {
+    throw new Error(
+      `Unsupported CODEX_API_MODE "${config.codex.mode}". Use one of: ${Array.from(SUPPORTED_API_MODES).join(', ')}`,
+    );
+  }
+
+  if (!config.tariffs.some((tariff) => tariff.id === config.defaultTariffId)) {
+    throw new Error(
+      `Unsupported DEFAULT_TARIFF_ID "${config.defaultTariffId}". Use one of: ${config.tariffs.map((tariff) => tariff.id).join(', ')}`,
+    );
+  }
+}
+
+export function validateAdminConfig() {
+  const missing = [];
+
+  if (!config.admin.username) {
+    missing.push('ADMIN_USERNAME');
+  }
+
+  if (!config.admin.password) {
+    missing.push('ADMIN_PASSWORD');
+  }
+
+  if (missing.length > 0) {
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  }
+}

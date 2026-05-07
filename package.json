@@ -1,0 +1,19 @@
+{
+  "name": "max-g4f-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MAX bot that proxies user messages to a g4f server",
+  "scripts": {
+    "start": "node src/index.js",
+    "start:admin": "node src/admin.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@maxhub/max-bot-api": "^0.2.2",
+    "dotenv": "^16.6.1"
+  }
+}
