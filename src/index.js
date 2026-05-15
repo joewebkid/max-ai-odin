@@ -4,6 +4,8 @@ import { G4FClient } from './g4f-client.js';
 import { BackendStore } from './backend-store.js';
 import { CodexSessionStore } from './codex-session-store.js';
 import { ConversationStore } from './history.js';
+import { DEFAULT_IMAGE_PROMPT, ImageInputError, extractMaxImageInput } from './image-input.js';
+import { normalizeTextForMax } from './max-text-normalizer.js';
 import { MetricsStore } from './metrics-store.js';
 
 const MAX_MESSAGE_LENGTH = 3900;
@@ -76,11 +78,47 @@ async function editTextMessage(ctx, text, extra = {}) {
 }
 
 async function replyChunked(ctx, text) {
-  const parts = splitLongText(text);
+  const normalizedText = normalizeTextForMax(text);
+  const parts = splitLongText(normalizedText);
 
   for (const part of parts) {
     await replyText(ctx, part);
   }
+}
+
+function startTypingLoop(ctx, intervalMs = 4_000) {
+  let stopped = false;
+  let timer = null;
+
+  const tick = async () => {
+    if (stopped) {
+      return;
+    }
+
+    try {
+      await ctx.sendAction('typing_on');
+    } catch {
+      // Ignore transient action errors so the main request can continue.
+    } finally {
+      if (!stopped) {
+        timer = setTimeout(() => {
+          void tick();
+        }, intervalMs);
+        timer.unref?.();
+      }
+    }
+  };
+
+  void tick();
+
+  return () => {
+    stopped = true;
+
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
 }
 
 function getIncomingText(ctx) {
@@ -282,6 +320,20 @@ async function trackRequest(ctx, backend, requestText, responseText, result, dur
   }
 }
 
+function buildRequestPreview(text, hasImage = false) {
+  const normalizedText = String(text ?? '').trim();
+
+  if (hasImage && normalizedText) {
+    return `[image]\n${normalizedText}`;
+  }
+
+  if (hasImage) {
+    return '[image]';
+  }
+
+  return normalizedText;
+}
+
 bot.catch(async (error, ctx) => {
   console.error('Unhandled bot error:', error);
 
@@ -456,13 +508,25 @@ bot.on('message_created', async (ctx) => {
   }
 
   const text = getIncomingText(ctx);
+  let imageInput = null;
 
-  if (!text) {
+  try {
+    imageInput = await extractMaxImageInput(ctx);
+  } catch (error) {
+    if (error instanceof ImageInputError) {
+      await replyText(ctx, error.message);
+      return;
+    }
+
+    throw error;
+  }
+
+  if (!text && !imageInput) {
     await replyText(ctx, 'Пока я умею работать только с текстовыми сообщениями.');
     return;
   }
 
-  if (text.startsWith('/')) {
+  if (text && text.startsWith('/') && !imageInput) {
     return;
   }
 
@@ -473,6 +537,8 @@ bot.on('message_created', async (ctx) => {
   const historyKey = getBackendHistoryKey(conversationKey, activeBackend);
   const user = getUserData(ctx);
   await trackInteraction(ctx, activeBackend);
+  const hasImage = Boolean(imageInput);
+  const requestText = buildRequestPreview(text, hasImage);
 
   if (user) {
     const quota = await metrics.getUserQuota(user.userId);
@@ -497,43 +563,69 @@ bot.on('message_created', async (ctx) => {
     return;
   }
 
+  if (hasImage && activeBackend === 'g4f') {
+    await replyText(
+      ctx,
+      'Распознавание изображений сейчас доступно только через codex-lb. Переключитесь через /mode и отправьте картинку ещё раз.',
+    );
+    return;
+  }
+
   pendingConversations.add(conversationKey);
+  const stopTyping = startTypingLoop(ctx);
 
   try {
     const startedAt = Date.now();
+    const effectiveUserText = text || (hasImage ? DEFAULT_IMAGE_PROMPT : '');
+    let result;
 
-    await ctx.sendAction('typing_on').catch(() => {});
-
-    const result = activeBackend === 'codex' && config.codex.useResponses
-      ? await client.askResponsesTurn({
+    if (activeBackend === 'codex' && hasImage) {
+      await codexSessions.reset(historyKey);
+      result = await client.ask(
+        client.buildVisionMessages(config.systemPrompt, effectiveUserText, imageInput),
+        config.requestTimeoutMs,
+      );
+    } else if (activeBackend === 'codex' && config.codex.useResponses) {
+      result = await client.askResponsesTurn({
         systemPrompt: config.systemPrompt,
-        userText: text,
+        userText: effectiveUserText,
         previousResponseId: codexSessions.get(historyKey),
-      }, config.requestTimeoutMs)
-      : await client.ask(history.buildMessages(historyKey, config.systemPrompt, text), config.requestTimeoutMs);
+        inputImage: imageInput,
+      }, config.requestTimeoutMs);
+    } else {
+      result = await client.ask(
+        history.buildMessages(historyKey, config.systemPrompt, effectiveUserText),
+        config.requestTimeoutMs,
+      );
+    }
     const answer = result.text;
     const durationMs = Date.now() - startedAt;
 
-    if (activeBackend === 'codex' && config.codex.useResponses) {
+    if (activeBackend === 'codex' && hasImage) {
+      history.reset(historyKey);
+    } else if (activeBackend === 'codex' && config.codex.useResponses) {
       if (result.responseId) {
         await codexSessions.set(historyKey, result.responseId);
       }
     } else {
-      history.append(historyKey, 'user', text);
+      history.append(historyKey, 'user', effectiveUserText);
       history.append(historyKey, 'assistant', answer);
     }
 
-    await trackRequest(ctx, activeBackend, text, answer, result, durationMs, true);
+    await trackRequest(ctx, activeBackend, requestText, answer, result, durationMs, true);
+    stopTyping();
 
     await replyChunked(ctx, answer);
   } catch (error) {
     console.error(`${backend.title} request failed:`, error);
-    await trackRequest(ctx, activeBackend, text, '', null, null, false, error.message ?? 'unknown error');
+    await trackRequest(ctx, activeBackend, requestText, '', null, null, false, error.message ?? 'unknown error');
+    stopTyping();
     await replyText(
       ctx,
       `Не получилось получить ответ через ${backend.title}. Проверьте настройки сервера и при необходимости переключитесь через /mode.`,
     );
   } finally {
+    stopTyping();
     pendingConversations.delete(conversationKey);
   }
 });
