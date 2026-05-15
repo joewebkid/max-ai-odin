@@ -104,6 +104,24 @@ function emptyBackendTotals() {
   };
 }
 
+function buildApiHeaders(apiKey) {
+  const headers = {
+    Accept: 'application/json',
+  };
+
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+    headers['g4f-api-key'] = apiKey;
+    headers['x-api-key'] = apiKey;
+  }
+
+  return headers;
+}
+
+function trimTrailingSlashes(value) {
+  return String(value ?? '').replace(/\/+$/, '');
+}
+
 function sumBackendTotals(entries, backend) {
   const totals = emptyBackendTotals();
 
@@ -123,6 +141,20 @@ function sumBackendTotals(entries, backend) {
   }
 
   return totals;
+}
+
+function inferPlatform(value, fallback = 'max') {
+  const normalized = String(value ?? '').trim().toLowerCase();
+
+  if (normalized.startsWith('tg:')) {
+    return 'telegram';
+  }
+
+  if (normalized.startsWith('max:') || normalized.startsWith('chat:') || normalized.startsWith('user:')) {
+    return 'max';
+  }
+
+  return fallback;
 }
 
 function normalizeCodexWindow(window) {
@@ -189,6 +221,218 @@ function getCodexUsageUrl() {
   return url.toString();
 }
 
+function getG4fEndpoint(pathname) {
+  if (!config.g4f.baseUrl) {
+    return null;
+  }
+
+  const url = new URL(config.g4f.baseUrl);
+  const basePath = trimTrailingSlashes(url.pathname);
+
+  if (config.g4f.mode === 'backend-api') {
+    url.pathname = `${basePath.endsWith('/backend-api/v2') ? basePath : `${basePath}/backend-api/v2`}${pathname}`;
+  } else if (config.g4f.mode === 'openai') {
+    url.pathname = `${basePath.endsWith('/v1') ? basePath : `${basePath}/v1`}${pathname}`;
+  } else {
+    return null;
+  }
+
+  url.search = '';
+  url.hash = '';
+  return url.toString();
+}
+
+function normalizeG4fModels(payload) {
+  const items = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.data)
+      ? payload.data
+      : [];
+
+  return items.map((item) => {
+    if (typeof item === 'string') {
+      const id = item.trim();
+
+      if (!id) {
+        return null;
+      }
+
+      return {
+        id,
+        label: id,
+        isDefault: false,
+        image: false,
+        vision: false,
+        providerCount: 0,
+      };
+    }
+
+    if (!item || typeof item !== 'object') {
+      return null;
+    }
+
+    const id = String(item.id ?? item.name ?? item.model ?? item.label ?? '').trim();
+
+    if (!id) {
+      return null;
+    }
+
+    const providers = Array.isArray(item.providers)
+      ? item.providers.map((provider) => {
+        if (typeof provider === 'string') {
+          return provider.trim();
+        }
+
+        if (provider && typeof provider === 'object') {
+          return String(provider.id ?? provider.name ?? provider.label ?? '').trim();
+        }
+
+        return '';
+      }).filter(Boolean)
+      : [];
+
+    return {
+      id,
+      label: String(item.label ?? item.name ?? id).trim() || id,
+      isDefault: Boolean(item.default),
+      image: Boolean(item.image),
+      vision: Boolean(item.vision),
+      providerCount: providers.length,
+    };
+  }).filter(Boolean);
+}
+
+function normalizeG4fProviders(payload) {
+  const items = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.data)
+      ? payload.data
+      : [];
+
+  return items.map((item) => {
+    if (!item || typeof item !== 'object') {
+      return null;
+    }
+
+    const id = String(item.name ?? item.id ?? item.label ?? '').trim();
+
+    if (!id) {
+      return null;
+    }
+
+    return {
+      id,
+      label: String(item.label ?? item.owned_by ?? id).trim() || id,
+      live: Number(item.live ?? 0),
+      auth: Boolean(item.auth),
+      image: Number(item.image ?? 0),
+      vision: Boolean(item.vision),
+    };
+  }).filter(Boolean);
+}
+
+async function fetchG4fAvailability() {
+  if (!config.g4f.baseUrl) {
+    return {
+      status: 'unconfigured',
+      source: null,
+      fetchedAt: new Date().toISOString(),
+      mode: config.g4f.mode,
+      baseUrl: null,
+      configuredProvider: config.g4f.provider || null,
+      configuredModel: config.g4f.model || null,
+      scopedByProvider: false,
+      modelCount: 0,
+      providerCount: 0,
+      models: [],
+      providers: [],
+      errorMessage: 'G4F_BASE_URL is missing',
+    };
+  }
+
+  if (config.g4f.mode === 'cryptosmi') {
+    return {
+      status: 'unsupported',
+      source: null,
+      fetchedAt: new Date().toISOString(),
+      mode: config.g4f.mode,
+      baseUrl: config.g4f.baseUrl,
+      configuredProvider: config.g4f.provider || null,
+      configuredModel: config.g4f.model || null,
+      scopedByProvider: false,
+      modelCount: 0,
+      providerCount: 0,
+      models: [],
+      providers: [],
+      errorMessage: 'Live models check is not supported for cryptosmi mode',
+    };
+  }
+
+  const scopedByProvider = config.g4f.mode === 'backend-api' && Boolean(config.g4f.provider);
+  const modelsSource = getG4fEndpoint(
+    scopedByProvider
+      ? `/models/${encodeURIComponent(config.g4f.provider)}`
+      : '/models',
+  );
+  const providersSource = getG4fEndpoint('/providers');
+
+  try {
+    const [modelsResponse, providersResponse] = await Promise.all([
+      fetch(modelsSource, {
+        method: 'GET',
+        headers: buildApiHeaders(config.g4f.apiKey),
+        signal: AbortSignal.timeout(7_000),
+      }),
+      fetch(providersSource, {
+        method: 'GET',
+        headers: buildApiHeaders(config.g4f.apiKey),
+        signal: AbortSignal.timeout(7_000),
+      }).catch(() => null),
+    ]);
+
+    if (!modelsResponse.ok) {
+      throw new Error(`HTTP ${modelsResponse.status}`);
+    }
+
+    const modelsPayload = await modelsResponse.json();
+    const providersPayload = providersResponse?.ok ? await providersResponse.json() : null;
+    const models = normalizeG4fModels(modelsPayload);
+    const providers = normalizeG4fProviders(providersPayload);
+
+    return {
+      status: 'ok',
+      source: modelsSource,
+      fetchedAt: new Date().toISOString(),
+      mode: config.g4f.mode,
+      baseUrl: config.g4f.baseUrl,
+      configuredProvider: config.g4f.provider || null,
+      configuredModel: config.g4f.model || null,
+      scopedByProvider,
+      modelCount: models.length,
+      providerCount: providers.length,
+      models,
+      providers,
+      errorMessage: null,
+    };
+  } catch (error) {
+    return {
+      status: 'error',
+      source: modelsSource,
+      fetchedAt: new Date().toISOString(),
+      mode: config.g4f.mode,
+      baseUrl: config.g4f.baseUrl,
+      configuredProvider: config.g4f.provider || null,
+      configuredModel: config.g4f.model || null,
+      scopedByProvider,
+      modelCount: 0,
+      providerCount: 0,
+      models: [],
+      providers: [],
+      errorMessage: error.message,
+    };
+  }
+}
+
 async function fetchCodexUsage() {
   if (!config.codex.baseUrl || !config.codex.apiKey) {
     return {
@@ -250,7 +494,7 @@ async function fetchCodexUsage() {
   }
 }
 
-function buildViewModel(snapshot, codexUsage) {
+function buildViewModel(snapshot, codexUsage, g4fAvailability) {
   const tariffMap = new Map(config.tariffs.map((tariff) => [tariff.id, tariff]));
   const users = Object.values(snapshot.users ?? {}).map((user) => {
     const membership = snapshot.memberships?.[String(user.userId)] ?? {
@@ -265,16 +509,24 @@ function buildViewModel(snapshot, codexUsage) {
 
     return {
       ...user,
+      platform: user.platform ?? inferPlatform(user.userId),
       ...quota,
     };
   }).sort((left, right) => (
     (right.lastSeenAt ?? '').localeCompare(left.lastSeenAt ?? '')
   ));
 
-  const chats = Object.values(snapshot.chats ?? {}).sort((left, right) => (
+  const chats = Object.values(snapshot.chats ?? {}).map((chat) => ({
+    ...chat,
+    platform: chat.platform ?? inferPlatform(chat.chatId),
+  })).sort((left, right) => (
     (right.lastSeenAt ?? '').localeCompare(left.lastSeenAt ?? '')
   ));
-  const recentRequests = (snapshot.recentRequests ?? []).slice(0, snapshot.recentLimit ?? 200);
+  const recentRequests = (snapshot.recentRequests ?? []).slice(0, snapshot.recentLimit ?? 200).map((item) => ({
+    ...item,
+    userPlatform: item.userPlatform ?? inferPlatform(item.userId, 'max'),
+    chatPlatform: item.chatPlatform ?? inferPlatform(item.chatId, 'max'),
+  }));
   const now = Date.now();
   const connectedWindowMs = 24 * 60 * 60 * 1000;
   const connectedUsers = users.filter((user) => now - Date.parse(user.lastSeenAt ?? 0) <= connectedWindowMs).length;
@@ -306,6 +558,21 @@ function buildViewModel(snapshot, codexUsage) {
       additionalRateLimits: codexUsage.additionalRateLimits,
       hasAnyLimits: codexUsage.hasAnyLimits,
       errorMessage: codexUsage.errorMessage,
+    },
+    g4f: {
+      status: g4fAvailability.status,
+      source: g4fAvailability.source,
+      fetchedAt: g4fAvailability.fetchedAt,
+      mode: g4fAvailability.mode,
+      baseUrl: g4fAvailability.baseUrl,
+      configuredProvider: g4fAvailability.configuredProvider,
+      configuredModel: g4fAvailability.configuredModel,
+      scopedByProvider: g4fAvailability.scopedByProvider,
+      modelCount: g4fAvailability.modelCount,
+      providerCount: g4fAvailability.providerCount,
+      models: g4fAvailability.models,
+      providers: g4fAvailability.providers,
+      errorMessage: g4fAvailability.errorMessage,
     },
     tariffs: config.tariffs,
     users,
@@ -579,6 +846,38 @@ function renderHtml() {
       .codex-note {
         color: var(--muted);
       }
+      .model-list {
+        display: grid;
+        gap: 10px;
+        max-height: 360px;
+        overflow: auto;
+      }
+      .model-row {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px;
+        background: #fbfcff;
+      }
+      .model-row strong {
+        display: block;
+        margin-bottom: 4px;
+        word-break: break-word;
+      }
+      .tag-row {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-top: 8px;
+      }
+      .tag {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: #eef3ff;
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 600;
+      }
       @media (max-width: 1260px) {
         .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .grid { grid-template-columns: 1fr; }
@@ -614,6 +913,19 @@ function renderHtml() {
           <div class="codex-grid">
             <div class="metric-strip" id="codex-metrics"></div>
             <div class="codex-stack" id="codex-limits"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" style="margin-bottom: 18px;">
+        <header>
+          <h2>G4F</h2>
+          <p>Живая проверка того, какие модели и провайдеры сейчас отдает ваш локальный <span class="mono">g4f</span> по текущей конфигурации бота.</p>
+        </header>
+        <div class="panel-body">
+          <div class="codex-grid">
+            <div class="metric-strip" id="g4f-metrics"></div>
+            <div class="codex-stack" id="g4f-models"></div>
           </div>
         </div>
       </section>
@@ -863,6 +1175,91 @@ function renderHtml() {
         document.getElementById('codex-limits').innerHTML = sections.join('');
       }
 
+      function renderG4f(g4f) {
+        const statusText = g4f.status === 'ok'
+          ? 'Данные получены'
+          : g4f.status === 'unconfigured'
+            ? 'Не настроено'
+            : g4f.status === 'unsupported'
+              ? 'Не поддерживается'
+              : 'Ошибка запроса';
+
+        const metrics = [
+          ['Статус', statusText],
+          ['Режим API', g4f.mode || '—'],
+          ['Provider', g4f.configuredProvider || 'auto'],
+          ['Моделей видно', formatNumber(g4f.modelCount)],
+        ];
+
+        document.getElementById('g4f-metrics').innerHTML = metrics.map(([label, value]) => \`
+          <article class="metric-box">
+            <div class="label">\${escapeHtml(label)}</div>
+            <div class="value" style="font-size: 20px; word-break: break-word;">\${escapeHtml(value)}</div>
+          </article>
+        \`).join('');
+
+        const currentProvider = (g4f.providers || []).find((provider) => provider.id === g4f.configuredProvider) || null;
+        const visibleModels = (g4f.models || []).slice(0, 60);
+        const modelList = visibleModels.length > 0
+          ? visibleModels.map((model) => \`
+              <div class="model-row">
+                <strong class="mono">\${escapeHtml(model.id)}</strong>
+                <div class="muted">\${escapeHtml(model.label || model.id)}</div>
+                <div class="tag-row">
+                  \${model.isDefault ? '<span class="tag">default</span>' : ''}
+                  \${model.image ? '<span class="tag">image</span>' : ''}
+                  \${model.vision ? '<span class="tag">vision</span>' : ''}
+                  \${model.providerCount > 0 ? \`<span class="tag">providers: \${escapeHtml(String(model.providerCount))}</span>\` : ''}
+                </div>
+              </div>
+            \`).join('')
+          : '<div class="codex-note">Сервер не вернул ни одной модели.</div>';
+
+        const sections = [];
+
+        sections.push(\`
+          <article class="limit-box">
+            <h3>Текущая конфигурация</h3>
+            <div class="codex-note">Base URL: <span class="mono">\${escapeHtml(g4f.baseUrl || '—')}</span></div>
+            <div class="codex-note">Источник проверки: <span class="mono">\${escapeHtml(g4f.source || '—')}</span></div>
+            <div class="codex-note">Настроенная модель: <span class="mono">\${escapeHtml(g4f.configuredModel || '—')}</span></div>
+            <div class="codex-note">Срез: \${g4f.scopedByProvider ? \`модели провайдера <span class="mono">\${escapeHtml(g4f.configuredProvider || '')}</span>\` : 'общий список моделей'}</div>
+            \${g4f.errorMessage ? \`<div class="bad" style="margin-top: 8px;">\${escapeHtml(g4f.errorMessage)}</div>\` : ''}
+          </article>
+        \`);
+
+        sections.push(\`
+          <article class="limit-box">
+            <h3>Провайдеры</h3>
+            <div class="limit-meta">
+              <span>Всего провайдеров: \${formatNumber(g4f.providerCount)}</span>
+              <span class="muted">\${currentProvider ? \`текущий: \${escapeHtml(currentProvider.label)}\` : 'текущий: —'}</span>
+            </div>
+            \${currentProvider ? \`
+              <div class="tag-row">
+                <span class="tag">live: \${escapeHtml(String(currentProvider.live))}</span>
+                \${currentProvider.auth ? '<span class="tag">auth</span>' : '<span class="tag">no-auth</span>'}
+                \${currentProvider.vision ? '<span class="tag">vision</span>' : ''}
+                \${currentProvider.image > 0 ? \`<span class="tag">image: \${escapeHtml(String(currentProvider.image))}</span>\` : ''}
+              </div>
+            \` : '<div class="codex-note">Детали текущего провайдера не найдены в ответе сервера.</div>'}
+          </article>
+        \`);
+
+        sections.push(\`
+          <article class="limit-box">
+            <h3>Доступные модели</h3>
+            <div class="limit-meta">
+              <span>Найдено: \${formatNumber(g4f.modelCount)}</span>
+              <span class="muted">\${g4f.modelCount > visibleModels.length ? \`показаны первые \${formatNumber(visibleModels.length)}\` : 'показан полный список'}</span>
+            </div>
+            <div class="model-list">\${modelList}</div>
+          </article>
+        \`);
+
+        document.getElementById('g4f-models').innerHTML = sections.join('');
+      }
+
       function renderUsers(users, tariffs) {
         const optionsHtml = (selectedId) => tariffs.map((tariff) => \`
           <option value="\${escapeHtml(tariff.id)}" \${tariff.id === selectedId ? 'selected' : ''}>
@@ -874,6 +1271,7 @@ function renderHtml() {
           <tr>
             <td>
               <div><strong>\${escapeHtml(user.name || 'Без имени')}</strong></div>
+              <div><span class="pill">\${escapeHtml(user.platform || 'max')}</span></div>
               <div class="muted mono">id: \${escapeHtml(user.userId)}</div>
               <div class="muted">\${escapeHtml(user.username || '')}</div>
               <div class="muted">последняя активность: \${formatDate(user.lastSeenAt)}</div>
@@ -925,6 +1323,7 @@ function renderHtml() {
           <tr>
             <td>
               <div><strong>\${escapeHtml(chat.title || 'Без названия')}</strong></div>
+              <div><span class="pill">\${escapeHtml(chat.platform || 'max')}</span></div>
               <div class="muted mono">id: \${escapeHtml(chat.chatId)}</div>
             </td>
             <td>
@@ -945,6 +1344,7 @@ function renderHtml() {
             <td class="\${item.success ? 'ok' : 'bad'}">\${item.success ? 'OK' : 'ERR'}</td>
             <td>
               <div><strong>\${escapeHtml(item.userName || '—')}</strong></div>
+              <div><span class="pill">\${escapeHtml(item.userPlatform || 'max')}</span></div>
               <div class="muted mono">u:\${escapeHtml(item.userId || '—')}</div>
             </td>
             <td>
@@ -963,6 +1363,7 @@ function renderHtml() {
         state = payload;
         renderSummary(payload.summary);
         renderCodex(payload.codex);
+        renderG4f(payload.g4f);
         renderTariffs(payload.tariffs);
         renderUsers(payload.users, payload.tariffs);
         renderChats(payload.chats);
@@ -991,7 +1392,7 @@ function renderHtml() {
       window.setPlan = async (userId) => {
         try {
           const select = document.getElementById('plan-' + userId);
-          await postJson('/api/users/' + userId + '/plan', { planId: select.value });
+          await postJson('/api/users/' + encodeURIComponent(userId) + '/plan', { planId: select.value });
           setStatus('Тариф пользователя обновлен.');
           await refresh();
         } catch (error) {
@@ -1008,7 +1409,7 @@ function renderHtml() {
             throw new Error('Введите положительное число токенов.');
           }
 
-          await postJson('/api/users/' + userId + '/tokens', { delta: value * direction });
+          await postJson('/api/users/' + encodeURIComponent(userId) + '/tokens', { delta: value * direction });
           setStatus(direction > 0 ? 'Токены добавлены.' : 'Токены сняты.');
           await refresh();
         } catch (error) {
@@ -1018,7 +1419,7 @@ function renderHtml() {
 
       window.toggleBlock = async (userId, blocked) => {
         try {
-          await postJson('/api/users/' + userId + '/block', { blocked });
+          await postJson('/api/users/' + encodeURIComponent(userId) + '/block', { blocked });
           setStatus(blocked ? 'Пользователь заблокирован.' : 'Пользователь разблокирован.');
           await refresh();
         } catch (error) {
@@ -1028,7 +1429,7 @@ function renderHtml() {
 
       window.resetCycle = async (userId) => {
         try {
-          await postJson('/api/users/' + userId + '/reset-cycle', {});
+          await postJson('/api/users/' + encodeURIComponent(userId) + '/reset-cycle', {});
           setStatus('Цикл пользователя сброшен.');
           await refresh();
         } catch (error) {
@@ -1064,15 +1465,19 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/api/stats') {
       const snapshot = await readMetricsSnapshot(config.metricsFile, config.recentRequestsLimit);
-      const codexUsage = await fetchCodexUsage();
-      json(response, 200, buildViewModel(snapshot, codexUsage));
+      const [codexUsage, g4fAvailability] = await Promise.all([
+        fetchCodexUsage(),
+        fetchG4fAvailability(),
+      ]);
+      json(response, 200, buildViewModel(snapshot, codexUsage, g4fAvailability));
       return;
     }
 
-    const match = url.pathname.match(/^\/api\/users\/(\d+)\/(plan|tokens|block|reset-cycle)$/);
+    const match = url.pathname.match(/^\/api\/users\/([^/]+)\/(plan|tokens|block|reset-cycle)$/);
 
     if (request.method === 'POST' && match) {
-      const [, userId, action] = match;
+      const [, rawUserId, action] = match;
+      const userId = decodeURIComponent(rawUserId);
       const body = await readJsonBody(request);
 
       if (action === 'plan') {
