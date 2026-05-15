@@ -388,6 +388,18 @@ function extractResultFromRawPayload(rawText) {
   return rawText.trim();
 }
 
+function isTimeoutError(error) {
+  if (!error) {
+    return false;
+  }
+
+  return (
+    error.name === 'TimeoutError'
+    || String(error.message ?? '').toLowerCase().includes('aborted due to timeout')
+    || String(error.message ?? '').toLowerCase().includes('timeout')
+  );
+}
+
 async function parseResponse(response) {
   const rawText = await response.text();
 
@@ -422,18 +434,66 @@ export class G4FClient {
     return this.askBackendApi(messages, timeoutMs);
   }
 
-  buildResponsesInput(userText) {
-    return [
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'input_text',
-            text: userText.trim(),
-          },
-        ],
-      },
-    ];
+  buildResponsesInput(userText, inputImage = null) {
+    const content = [];
+    const normalizedText = String(userText ?? '').trim();
+
+    if (normalizedText) {
+      content.push({
+        type: 'input_text',
+        text: normalizedText,
+      });
+    }
+
+    if (inputImage?.imageUrl) {
+      content.push({
+        type: 'input_image',
+        image_url: inputImage.imageUrl,
+        detail: inputImage.detail ?? 'auto',
+      });
+    }
+
+    return [{
+      role: 'user',
+      content,
+    }];
+  }
+
+  buildVisionMessages(systemPrompt, userText, inputImage) {
+    const messages = [];
+    const content = [];
+    const normalizedText = String(userText ?? '').trim();
+
+    if (systemPrompt) {
+      messages.push({
+        role: 'system',
+        content: systemPrompt,
+      });
+    }
+
+    if (normalizedText) {
+      content.push({
+        type: 'text',
+        text: normalizedText,
+      });
+    }
+
+    if (inputImage?.imageUrl) {
+      content.push({
+        type: 'image_url',
+        image_url: {
+          url: inputImage.imageUrl,
+          detail: inputImage.detail ?? 'auto',
+        },
+      });
+    }
+
+    messages.push({
+      role: 'user',
+      content,
+    });
+
+    return messages;
   }
 
   isRecoverablePreviousResponseError(error) {
@@ -447,12 +507,12 @@ export class G4FClient {
     );
   }
 
-  async askResponsesTurn({ systemPrompt, userText, previousResponseId }, timeoutMs) {
-    const makeRequest = async (responseId) => {
+  async askResponsesTurn({ systemPrompt, userText, previousResponseId, inputImage = null }, timeoutMs) {
+    const makeRequest = async (responseId, requestTimeoutMs = timeoutMs) => {
       const payload = {
         model: this.config.model,
         stream: false,
-        input: this.buildResponsesInput(userText),
+        input: this.buildResponsesInput(userText, inputImage),
       };
 
       if (systemPrompt) {
@@ -467,7 +527,7 @@ export class G4FClient {
         method: 'POST',
         headers: buildHeaders(this.config.apiKey),
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(requestTimeoutMs),
       });
 
       return parseResponse(response);
@@ -476,15 +536,24 @@ export class G4FClient {
     try {
       return await makeRequest(previousResponseId);
     } catch (error) {
-      if (!previousResponseId || !this.isRecoverablePreviousResponseError(error)) {
-        throw error;
+      if (previousResponseId && this.isRecoverablePreviousResponseError(error)) {
+        const retried = await makeRequest(null, Math.min(timeoutMs, 45_000));
+        return {
+          ...retried,
+          sessionReset: true,
+        };
       }
 
-      const retried = await makeRequest(null);
-      return {
-        ...retried,
-        sessionReset: true,
-      };
+      if (previousResponseId && isTimeoutError(error)) {
+        const retried = await makeRequest(null, Math.min(timeoutMs, 45_000));
+        return {
+          ...retried,
+          sessionReset: true,
+          timeoutRecovered: true,
+        };
+      }
+
+      throw error;
     }
   }
 

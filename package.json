@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "MAX bot that proxies user messages to a g4f server",
+  "description": "MAX and Telegram bots that proxy user messages to g4f and codex-lb",
   "scripts": {
     "start": "node src/index.js",
+    "start:telegram": "node src/telegram.js",
     "start:admin": "node src/admin.js",
     "dev": "node --watch src/index.js"
   },
@@ -14,6 +15,10 @@
   },
   "dependencies": {
     "@maxhub/max-bot-api": "^0.2.2",
-    "dotenv": "^16.6.1"
+    "dotenv": "^16.6.1",
+    "grammy": "^1.42.0",
+    "https-proxy-agent": "^9.0.0",
+    "marked": "^18.0.3",
+    "node-fetch": "^2.7.0"
   }
 }

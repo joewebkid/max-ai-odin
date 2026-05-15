@@ -1,10 +1,11 @@
-# MAX bot -> g4f / codex-lb
+# MAX and Telegram bots -> g4f / codex-lb
 
-Бот для мессенджера MAX, который принимает текстовые сообщения и умеет отправлять их либо на ваш `g4f`-сервер, либо в `codex-lb` по API ключу.
+Боты для MAX и Telegram, которые принимают текстовые сообщения и умеют отправлять их либо на ваш `g4f`-сервер, либо в `codex-lb` по API ключу.
 
 ## Что уже сделано
 
 - Подключена официальная библиотека MAX: `@maxhub/max-bot-api`
+- Подключен Telegram Bot API через `grammy`
 - Добавлен клиент для `g4f` и `codex-lb`
 - Поддерживаются три режима API:
   - `backend-api` -> `POST /backend-api/v2/conversation`
@@ -15,6 +16,7 @@
 - Режим можно переключать через inline-меню прямо в чате
 - Бот сохраняет метрики по пользователям, чатам, backend и токенам
 - Есть отдельный web-admin процесс для просмотра статистики и управления лимитами
+- Метрики и лимиты общие для MAX и Telegram, но пользователи хранятся раздельно по платформам
 - Длинные ответы режутся на части под лимит MAX
 - Для `codex-lb` можно держать одну живую server-side сессию через `responses` API
 
@@ -26,6 +28,8 @@
 
 ```env
 DEFAULT_BACKEND=g4f
+TELEGRAM_BOT_TOKEN=123456:telegram_token
+TELEGRAM_PROXY_URL=
 TOKEN_CYCLE_DAYS=30
 DEFAULT_TARIFF_ID=starter
 TARIFFS_JSON=[{"id":"starter","name":"Старт","description":"Для редких обращений и тестов.","priceText":"0 ₽","monthlyTokens":50000,"isPublic":true},{"id":"plus","name":"Плюс","description":"Для ежедневной работы с ботом.","priceText":"990 ₽","monthlyTokens":300000,"isPublic":true},{"id":"pro","name":"Про","description":"Для активного использования и длинных диалогов.","priceText":"3 990 ₽","monthlyTokens":1500000,"isPublic":true}]
@@ -95,8 +99,13 @@ G4F_GENERATE_PATH=/api/text/generate
 ```bash
 npm install
 npm start
+npm run start:telegram
 npm run start:admin
 ```
+
+Если запускаете только Telegram-бота, достаточно `npm run start:telegram`. Для MAX по-прежнему используется `npm start`.
+
+Если сервер напрямую не видит `api.telegram.org`, можно указать `TELEGRAM_PROXY_URL`, например `http://172.17.0.1:10809`. Тогда Telegram Bot API будет вызываться через HTTP proxy.
 
 ## Команды
 
@@ -105,6 +114,8 @@ npm run start:admin
 - `/mode` - открыть меню переключения между `g4f` и `codex-lb`
 - `/tariff` - открыть меню тарифов и посмотреть остаток токенов
 - `/reset` - очистить историю диалога для обоих режимов
+
+Telegram-бот использует те же команды и ту же логику квот, что и MAX-бот. Контекст и тарифы считаются отдельно для каждого Telegram-пользователя, а в группах контекст ведётся отдельно для каждого участника внутри чата.
 
 Если включен `CODEX_USE_RESPONSES=true`, то для `codex-lb` бот использует `POST /v1/responses` и хранит `previous_response_id` по каждому чату в `CODEX_SESSION_FILE`. Это даёт настоящую continuity-сессию на стороне `codex-lb`, а не только локальную историю в памяти процесса.
 
@@ -143,6 +154,8 @@ ADMIN_PASSWORD=change_me
 ## Что важно
 
 - В `.env` уже должен быть корректный `MAX_BOT_TOKEN`
+- Для Telegram нужен `TELEGRAM_BOT_TOKEN`
+- Если Telegram API недоступен напрямую, задайте `TELEGRAM_PROXY_URL`
 - Нужно обязательно заполнить `G4F_BASE_URL` и `CODEX_BASE_URL`
 - Если на вашем сервере включена защита `g4f-api-key`, укажите `G4F_API_KEY`
 - Для `codex-lb` укажите `CODEX_API_KEY`

@@ -138,6 +138,8 @@ const defaultTariffId = (process.env.DEFAULT_TARIFF_ID ?? tariffs[0]?.id ?? 'sta
 
 export const config = {
   maxBotToken: (process.env.MAX_BOT_TOKEN ?? '').trim(),
+  telegramBotToken: (process.env.TELEGRAM_BOT_TOKEN ?? '').trim(),
+  telegramProxyUrl: (process.env.TELEGRAM_PROXY_URL ?? '').trim(),
   systemPrompt: (process.env.SYSTEM_PROMPT ?? '').trim() || 'Ты полезный русскоязычный ассистент.',
   maxHistoryMessages: parsePositiveInt(process.env.MAX_HISTORY_MESSAGES, 12),
   requestTimeoutMs: parsePositiveInt(process.env.REQUEST_TIMEOUT_MS ?? process.env.G4F_TIMEOUT_MS, 60_000),
@@ -175,6 +177,50 @@ export function validateConfig() {
 
   if (!config.maxBotToken) {
     missing.push('MAX_BOT_TOKEN');
+  }
+
+  if (!config.g4f.baseUrl) {
+    missing.push('G4F_BASE_URL');
+  }
+
+  if (!config.codex.baseUrl) {
+    missing.push('CODEX_BASE_URL');
+  }
+
+  if (missing.length > 0) {
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  }
+
+  if (!SUPPORTED_BACKENDS.has(config.defaultBackend)) {
+    throw new Error(
+      `Unsupported DEFAULT_BACKEND "${config.defaultBackend}". Use one of: ${Array.from(SUPPORTED_BACKENDS).join(', ')}`,
+    );
+  }
+
+  if (!SUPPORTED_API_MODES.has(config.g4f.mode)) {
+    throw new Error(
+      `Unsupported G4F_API_MODE "${config.g4f.mode}". Use one of: ${Array.from(SUPPORTED_API_MODES).join(', ')}`,
+    );
+  }
+
+  if (!SUPPORTED_API_MODES.has(config.codex.mode)) {
+    throw new Error(
+      `Unsupported CODEX_API_MODE "${config.codex.mode}". Use one of: ${Array.from(SUPPORTED_API_MODES).join(', ')}`,
+    );
+  }
+
+  if (!config.tariffs.some((tariff) => tariff.id === config.defaultTariffId)) {
+    throw new Error(
+      `Unsupported DEFAULT_TARIFF_ID "${config.defaultTariffId}". Use one of: ${config.tariffs.map((tariff) => tariff.id).join(', ')}`,
+    );
+  }
+}
+
+export function validateTelegramConfig() {
+  const missing = [];
+
+  if (!config.telegramBotToken) {
+    missing.push('TELEGRAM_BOT_TOKEN');
   }
 
   if (!config.g4f.baseUrl) {

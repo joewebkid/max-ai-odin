@@ -160,6 +160,7 @@ function applyUsage(target, usage) {
 function buildUserEntry(user, backend, nowIso) {
   return {
     userId: user.userId,
+    platform: user.platform ?? 'unknown',
     name: user.name,
     username: user.username,
     isBot: user.isBot,
@@ -182,6 +183,7 @@ function buildUserEntry(user, backend, nowIso) {
 function buildChatEntry(chat, backend, nowIso) {
   return {
     chatId: chat.chatId,
+    platform: chat.platform ?? 'unknown',
     type: chat.type,
     title: chat.title,
     status: chat.status,
@@ -375,6 +377,7 @@ export class MetricsStore {
     const entry = this.state.users[key] ?? buildUserEntry(user, backend, nowIso);
 
     entry.name = user.name || entry.name;
+    entry.platform = user.platform ?? entry.platform ?? 'unknown';
     entry.username = user.username ?? entry.username;
     entry.isBot = user.isBot;
     entry.lastSeenAt = nowIso;
@@ -399,6 +402,7 @@ export class MetricsStore {
     const entry = this.state.chats[key] ?? buildChatEntry(chat, backend, nowIso);
 
     entry.type = chat.type ?? entry.type;
+    entry.platform = chat.platform ?? entry.platform ?? 'unknown';
     entry.title = chat.title ?? entry.title;
     entry.status = chat.status ?? entry.status;
     entry.isPublic = chat.isPublic ?? entry.isPublic;
@@ -583,9 +587,11 @@ export class MetricsStore {
           completionTokens: normalizedUsage.completionTokens,
           totalTokens: normalizedUsage.totalTokens,
           userId: user?.userId ?? null,
+          userPlatform: user?.platform ?? null,
           userName: user?.name ?? null,
           username: user?.username ?? null,
           chatId: chat?.chatId ?? null,
+          chatPlatform: chat?.platform ?? null,
           chatTitle: chat?.title ?? null,
           requestChars: requestText.length,
           responseChars: responseText.length,
