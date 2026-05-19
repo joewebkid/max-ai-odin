@@ -2,7 +2,11 @@ import path from 'node:path';
 import 'dotenv/config';
 
 const SUPPORTED_API_MODES = new Set(['backend-api', 'openai', 'cryptosmi']);
-const SUPPORTED_BACKENDS = new Set(['g4f', 'codex']);
+const BACKEND_ALIASES = new Map([
+  ['g4f', 'free'],
+  ['codex', 'chatgpt'],
+]);
+const SUPPORTED_BACKENDS = new Set(['free', 'chatgpt', 'claude', 'gemini']);
 const DEFAULT_TARIFFS = [
   {
     id: 'starter',
@@ -72,6 +76,16 @@ function trimTrailingSlashes(value) {
   return value.replace(/\/+$/, '');
 }
 
+function normalizeBackendId(value, fallback = 'free') {
+  const normalized = String(value ?? '').trim().toLowerCase();
+
+  if (!normalized) {
+    return fallback;
+  }
+
+  return BACKEND_ALIASES.get(normalized) ?? normalized;
+}
+
 function buildApiConfig(prefix, defaults = {}) {
   return {
     baseUrl: trimTrailingSlashes((process.env[`${prefix}_BASE_URL`] ?? '').trim()),
@@ -135,6 +149,10 @@ function parseTariffs(value) {
 
 const tariffs = parseTariffs(process.env.TARIFFS_JSON ?? '');
 const defaultTariffId = (process.env.DEFAULT_TARIFF_ID ?? tariffs[0]?.id ?? 'starter').trim().toLowerCase();
+const antiApiBaseUrl = trimTrailingSlashes(
+  (process.env.ANTI_API_BASE_URL ?? 'http://127.0.0.1:8964').trim() || 'http://127.0.0.1:8964',
+);
+const antiApiKey = (process.env.ANTI_API_API_KEY ?? '').trim();
 
 export const config = {
   maxBotToken: (process.env.MAX_BOT_TOKEN ?? '').trim(),
@@ -146,7 +164,7 @@ export const config = {
   metricsFile: path.resolve(process.cwd(), (process.env.METRICS_FILE ?? 'data/bot-metrics.json').trim() || 'data/bot-metrics.json'),
   recentRequestsLimit: parsePositiveInt(process.env.RECENT_REQUESTS_LIMIT, 200),
   tokenCycleDays: parsePositiveInt(process.env.TOKEN_CYCLE_DAYS, 30),
-  defaultBackend: (process.env.DEFAULT_BACKEND ?? 'g4f').trim().toLowerCase(),
+  defaultBackend: normalizeBackendId(process.env.DEFAULT_BACKEND ?? 'free'),
   tariffs,
   defaultTariffId,
   g4f: buildApiConfig('G4F', {
@@ -160,6 +178,24 @@ export const config = {
     generatePath: '/generate',
     useResponses: true,
   }),
+  antiClaude: {
+    baseUrl: antiApiBaseUrl,
+    mode: 'openai',
+    apiKey: antiApiKey,
+    model: (process.env.ANTI_API_CLAUDE_MODEL ?? 'route:claude').trim(),
+    provider: '',
+    generatePath: '/generate',
+    useResponses: false,
+  },
+  antiGemini: {
+    baseUrl: antiApiBaseUrl,
+    mode: 'openai',
+    apiKey: antiApiKey,
+    model: (process.env.ANTI_API_GEMINI_MODEL ?? 'gemini-3.1-pro-high').trim(),
+    provider: '',
+    generatePath: '/generate',
+    useResponses: false,
+  },
   codexSessionFile: path.resolve(
     process.cwd(),
     (process.env.CODEX_SESSION_FILE ?? 'data/codex-sessions.json').trim() || 'data/codex-sessions.json',
@@ -209,6 +245,12 @@ export function validateConfig() {
     );
   }
 
+  if (!SUPPORTED_API_MODES.has(config.antiClaude.mode)) {
+    throw new Error(
+      `Unsupported ANTI_API mode "${config.antiClaude.mode}". Use one of: ${Array.from(SUPPORTED_API_MODES).join(', ')}`,
+    );
+  }
+
   if (!config.tariffs.some((tariff) => tariff.id === config.defaultTariffId)) {
     throw new Error(
       `Unsupported DEFAULT_TARIFF_ID "${config.defaultTariffId}". Use one of: ${config.tariffs.map((tariff) => tariff.id).join(', ')}`,
@@ -250,6 +292,12 @@ export function validateTelegramConfig() {
   if (!SUPPORTED_API_MODES.has(config.codex.mode)) {
     throw new Error(
       `Unsupported CODEX_API_MODE "${config.codex.mode}". Use one of: ${Array.from(SUPPORTED_API_MODES).join(', ')}`,
+    );
+  }
+
+  if (!SUPPORTED_API_MODES.has(config.antiClaude.mode)) {
+    throw new Error(
+      `Unsupported ANTI_API mode "${config.antiClaude.mode}". Use one of: ${Array.from(SUPPORTED_API_MODES).join(', ')}`,
     );
   }
 

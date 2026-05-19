@@ -400,6 +400,11 @@ function isTimeoutError(error) {
   );
 }
 
+function isEmptyResponseError(error) {
+  const message = String(error?.message ?? '').toLowerCase();
+  return message.includes('empty response');
+}
+
 async function parseResponse(response) {
   const rawText = await response.text();
 
@@ -434,9 +439,36 @@ export class G4FClient {
     return this.askBackendApi(messages, timeoutMs);
   }
 
-  buildResponsesInput(userText, inputImage = null) {
+  buildResponsesBootstrapText(historyMessages, userText) {
+    const turns = Array.isArray(historyMessages)
+      ? historyMessages
+        .filter((message) => message && typeof message.content === 'string' && message.content.trim())
+        .map((message) => `${message.role === 'assistant' ? 'Ассистент' : 'Пользователь'}: ${message.content.trim()}`)
+      : [];
+
+    if (turns.length === 0) {
+      return String(userText ?? '').trim();
+    }
+
+    const normalizedUserText = String(userText ?? '').trim();
+
+    return [
+      'Продолжай диалог, учитывая локально сохранённый контекст предыдущих сообщений.',
+      '',
+      'Контекст:',
+      turns.join('\n\n'),
+      '',
+      normalizedUserText
+        ? `Новый запрос пользователя:\n${normalizedUserText}`
+        : 'Продолжи разговор с учётом этого контекста.',
+    ].join('\n');
+  }
+
+  buildResponsesInput(userText, inputImage = null, historyMessages = []) {
     const content = [];
-    const normalizedText = String(userText ?? '').trim();
+    const normalizedText = Array.isArray(historyMessages) && historyMessages.length > 0
+      ? this.buildResponsesBootstrapText(historyMessages, userText)
+      : String(userText ?? '').trim();
 
     if (normalizedText) {
       content.push({
@@ -504,15 +536,26 @@ export class G4FClient {
       || message.includes('response not found')
       || message.includes('unknown response')
       || message.includes('invalid previous response')
+      || message.includes('session not found')
     );
   }
 
-  async askResponsesTurn({ systemPrompt, userText, previousResponseId, inputImage = null }, timeoutMs) {
+  async askResponsesTurn({
+    systemPrompt,
+    userText,
+    previousResponseId,
+    inputImage = null,
+    historyMessages = [],
+  }, timeoutMs) {
     const makeRequest = async (responseId, requestTimeoutMs = timeoutMs) => {
       const payload = {
         model: this.config.model,
         stream: false,
-        input: this.buildResponsesInput(userText, inputImage),
+        input: this.buildResponsesInput(
+          userText,
+          inputImage,
+          responseId ? [] : historyMessages,
+        ),
       };
 
       if (systemPrompt) {
@@ -586,18 +629,30 @@ export class G4FClient {
   }
 
   async askOpenAI(messages, timeoutMs) {
-    const response = await fetch(resolveOpenAIEndpoint(this.config.baseUrl), {
-      method: 'POST',
-      headers: buildHeaders(this.config.apiKey),
-      body: JSON.stringify({
-        model: this.config.model,
-        messages,
-        stream: false,
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    const makeRequest = async (requestTimeoutMs = timeoutMs) => {
+      const response = await fetch(resolveOpenAIEndpoint(this.config.baseUrl), {
+        method: 'POST',
+        headers: buildHeaders(this.config.apiKey),
+        body: JSON.stringify({
+          model: this.config.model,
+          messages,
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(requestTimeoutMs),
+      });
 
-    return parseResponse(response);
+      return parseResponse(response);
+    };
+
+    try {
+      return await makeRequest();
+    } catch (error) {
+      if (isEmptyResponseError(error)) {
+        return makeRequest(Math.min(timeoutMs, 45_000));
+      }
+
+      throw error;
+    }
   }
 
   async askBackendApi(messages, timeoutMs) {

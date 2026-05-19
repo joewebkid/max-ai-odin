@@ -12,16 +12,24 @@ import { renderTelegramHtmlChunks } from './telegram-text.js';
 
 const TELEGRAM_MESSAGE_LENGTH = 3600;
 const BACKENDS = {
-  g4f: {
-    title: 'g4f',
-    description: 'локальный g4f-сервер',
+  free: {
+    title: 'Free',
+    description: 'g4f free',
   },
-  codex: {
-    title: 'codex-lb',
-    description: 'codex-lb через API ключ',
+  chatgpt: {
+    title: 'Chat GPT',
+    description: 'codex-lb',
+  },
+  claude: {
+    title: 'Claude',
+    description: 'Opus через anti-api',
+  },
+  gemini: {
+    title: 'Gemini',
+    description: 'Pro High через anti-api',
   },
 };
-const BACKEND_IDS = Object.keys(BACKENDS);
+const BACKEND_IDS = ['free', 'chatgpt', 'claude', 'gemini'];
 const PUBLIC_TARIFFS = config.tariffs.filter((tariff) => tariff.isPublic);
 
 function formatNumber(value) {
@@ -110,10 +118,18 @@ function getChatData(ctx) {
 }
 
 function getModeKeyboard(activeBackend) {
-  return BACKEND_IDS.reduce((keyboard, backendId) => {
+  const keyboard = new InlineKeyboard();
+
+  BACKEND_IDS.forEach((backendId, index) => {
     const label = activeBackend === backendId ? `${BACKENDS[backendId].title} ✓` : BACKENDS[backendId].title;
-    return keyboard.text(label, `mode:${backendId}`);
-  }, new InlineKeyboard());
+    keyboard.text(label, `mode:${backendId}`);
+
+    if (index % 2 === 1 && index < BACKEND_IDS.length - 1) {
+      keyboard.row();
+    }
+  });
+
+  return keyboard;
 }
 
 function getTariffKeyboard(activeTariffId) {
@@ -133,11 +149,13 @@ function getTariffKeyboard(activeTariffId) {
 
 function getModeText(activeBackend) {
   return [
-    'Выберите, через что отправлять запросы.',
+    'Выберите режим ответа.',
     `Сейчас активно: ${BACKENDS[activeBackend].title}.`,
-    `g4f: ${BACKENDS.g4f.description}.`,
-    `codex-lb: ${BACKENDS.codex.description}.`,
-    'Для каждого режима хранится свой контекст, поэтому можно спокойно переключаться туда-сюда.',
+    '1. Free: g4f.',
+    '2. Chat GPT: codex-lb.',
+    '3. Claude: Opus через anti-api.',
+    '4. Gemini: Pro High через anti-api.',
+    'Для каждого режима хранится свой контекст, поэтому можно спокойно переключаться между ними.',
   ].join('\n');
 }
 
@@ -267,7 +285,7 @@ async function resetConversationHistory(history, codexSessionsStore, conversatio
     const backendKey = getBackendHistoryKey(conversationKey, backendId);
     history.reset(backendKey);
 
-    if (backendId === 'codex') {
+    if (backendId === 'chatgpt') {
       await codexSessionsStore.reset(backendKey);
     }
   }
@@ -286,8 +304,10 @@ const bot = new Bot(config.telegramBotToken, {
   client: telegramClientConfig,
 });
 const clients = {
-  g4f: new G4FClient(config.g4f),
-  codex: new G4FClient(config.codex),
+  free: new G4FClient(config.g4f),
+  chatgpt: new G4FClient(config.codex),
+  claude: new G4FClient(config.antiClaude),
+  gemini: new G4FClient(config.antiGemini),
 };
 const history = new ConversationStore(config.maxHistoryMessages);
 const backendStore = new BackendStore(config.defaultBackend);
@@ -350,6 +370,20 @@ function buildRequestPreview(text, hasImage = false) {
   return normalizedText;
 }
 
+function buildHistoryEntryText(text, hasImage = false) {
+  const normalizedText = String(text ?? '').trim();
+
+  if (hasImage && normalizedText) {
+    return `[Изображение]\n${normalizedText}`;
+  }
+
+  if (hasImage) {
+    return '[Изображение]';
+  }
+
+  return normalizedText;
+}
+
 bot.catch(async (error) => {
   console.error('Unhandled Telegram bot error:', error);
 });
@@ -369,7 +403,7 @@ await bot.api.setMyCommands([
   },
   {
     command: 'mode',
-    description: 'Выбрать режим: g4f или codex-lb',
+    description: 'Выбрать режим: Free / Chat GPT / Claude / Gemini',
   },
   {
     command: 'tariff',
@@ -391,7 +425,7 @@ bot.command('start', async (ctx) => {
   await sendModeMenu(
     ctx,
     activeBackend,
-    'Бот готов. Отправьте текст, и я передам его через выбранный режим. Команды: /help, /mode, /tariff и /reset.',
+    'Бот готов. Отправьте текст, и я передам его через выбранный режим. Доступны Free, Chat GPT, Claude и Gemini. Команды: /help, /mode, /tariff и /reset.',
   );
 });
 
@@ -407,9 +441,9 @@ bot.command('help', async (ctx) => {
       'Как пользоваться:',
       '1. Отправьте обычное текстовое сообщение.',
       '2. Я передам его через активный режим и верну ответ.',
-      '3. /mode открывает меню переключения между g4f и codex-lb.',
+      '3. /mode открывает меню переключения между Free, Chat GPT, Claude и Gemini.',
       '4. /tariff открывает меню тарифов и показывает остаток токенов.',
-      '5. /reset очищает историю сразу для обоих режимов.',
+      '5. /reset очищает историю сразу для всех четырех режимов.',
     ].join('\n'),
   );
 });
@@ -421,7 +455,7 @@ bot.command('reset', async (ctx) => {
 
   await resetConversationHistory(history, codexSessions, conversationKey);
 
-  await sendModeMenu(ctx, activeBackend, 'История диалога очищена для g4f и codex-lb.');
+  await sendModeMenu(ctx, activeBackend, 'История диалога очищена для Free, Chat GPT, Claude и Gemini.');
 });
 
 bot.command('mode', async (ctx) => {
@@ -568,10 +602,10 @@ bot.on('message', async (ctx) => {
     return;
   }
 
-  if (hasImage && activeBackend === 'g4f') {
+  if (hasImage && activeBackend !== 'chatgpt') {
     await replyText(
       ctx,
-      'Распознавание изображений сейчас доступно только через codex-lb. Переключитесь через /mode и отправьте картинку ещё раз.',
+      'Распознавание изображений сейчас доступно только в режиме Chat GPT. Переключитесь через /mode и отправьте картинку ещё раз.',
     );
     return;
   }
@@ -582,20 +616,21 @@ bot.on('message', async (ctx) => {
   try {
     const startedAt = Date.now();
     const effectiveUserText = text || (hasImage ? DEFAULT_IMAGE_PROMPT : '');
+    const historyUserText = buildHistoryEntryText(effectiveUserText, hasImage);
     let result;
 
-    if (activeBackend === 'codex' && hasImage) {
-      await codexSessions.reset(historyKey);
+    if (activeBackend === 'chatgpt' && hasImage) {
       result = await client.ask(
         client.buildVisionMessages(config.systemPrompt, effectiveUserText, imageInput),
         config.requestTimeoutMs,
       );
-    } else if (activeBackend === 'codex' && config.codex.useResponses) {
+    } else if (activeBackend === 'chatgpt' && config.codex.useResponses) {
       result = await client.askResponsesTurn({
         systemPrompt: config.systemPrompt,
         userText: effectiveUserText,
         previousResponseId: codexSessions.get(historyKey),
         inputImage: imageInput,
+        historyMessages: history.get(historyKey),
       }, config.requestTimeoutMs);
     } else {
       result = await client.ask(
@@ -606,16 +641,16 @@ bot.on('message', async (ctx) => {
     const answer = result.text;
     const durationMs = Date.now() - startedAt;
 
-    if (activeBackend === 'codex' && hasImage) {
-      history.reset(historyKey);
-    } else if (activeBackend === 'codex' && config.codex.useResponses) {
+    if (activeBackend === 'chatgpt' && hasImage) {
+      await codexSessions.reset(historyKey);
+    } else if (activeBackend === 'chatgpt' && config.codex.useResponses) {
       if (result.responseId) {
         await codexSessions.set(historyKey, result.responseId);
       }
-    } else {
-      history.append(historyKey, 'user', effectiveUserText);
-      history.append(historyKey, 'assistant', answer);
     }
+
+    history.append(historyKey, 'user', historyUserText);
+    history.append(historyKey, 'assistant', answer);
 
     await trackRequest(ctx, activeBackend, requestText, answer, result, durationMs, true);
     stopTyping();
