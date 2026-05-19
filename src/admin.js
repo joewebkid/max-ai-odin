@@ -143,6 +143,22 @@ function sumBackendTotals(entries, backend) {
   return totals;
 }
 
+function sumBackendTotalsMany(entries, backends) {
+  const totals = emptyBackendTotals();
+
+  for (const backend of backends) {
+    const current = sumBackendTotals(entries, backend);
+    totals.requestCount += current.requestCount;
+    totals.successCount += current.successCount;
+    totals.errorCount += current.errorCount;
+    totals.promptTokens += current.promptTokens;
+    totals.completionTokens += current.completionTokens;
+    totals.totalTokens += current.totalTokens;
+  }
+
+  return totals;
+}
+
 function inferPlatform(value, fallback = 'max') {
   const normalized = String(value ?? '').trim().toLowerCase();
 
@@ -531,7 +547,7 @@ function buildViewModel(snapshot, codexUsage, g4fAvailability) {
   const connectedWindowMs = 24 * 60 * 60 * 1000;
   const connectedUsers = users.filter((user) => now - Date.parse(user.lastSeenAt ?? 0) <= connectedWindowMs).length;
   const blockedUsers = users.filter((user) => user.isBlocked).length;
-  const codexTotals = sumBackendTotals(snapshot.chats ?? {}, 'codex');
+  const codexTotals = sumBackendTotalsMany(snapshot.chats ?? {}, ['chatgpt', 'codex']);
 
   return {
     updatedAt: snapshot.updatedAt,
@@ -906,8 +922,8 @@ function renderHtml() {
 
       <section class="panel" style="margin-bottom: 18px;">
         <header>
-          <h2>Codex LB</h2>
-          <p>Общая статистика использования <span class="mono">codex</span> ботом и живой остаток лимитов текущего API key в стиле <span class="mono">codex-lb</span>.</p>
+          <h2>Chat GPT / Codex LB</h2>
+          <p>Общая статистика использования режима <span class="mono">chatgpt</span> ботом и живой остаток лимитов текущего API key в стиле <span class="mono">codex-lb</span>.</p>
         </header>
         <div class="panel-body">
           <div class="codex-grid">
@@ -1086,8 +1102,8 @@ function renderHtml() {
 
       function renderCodex(codex) {
         const metrics = [
-          ['Запросы через codex', formatNumber(codex.requestCount)],
-          ['Токены через codex', formatNumber(codex.totalTokens)],
+          ['Запросы через Chat GPT', formatNumber(codex.requestCount)],
+          ['Токены через Chat GPT', formatNumber(codex.totalTokens)],
           ['Успешно', formatNumber(codex.successCount)],
           ['Ошибки', formatNumber(codex.errorCount)],
         ];
