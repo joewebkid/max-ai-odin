@@ -6,7 +6,7 @@ const BACKEND_ALIASES = new Map([
   ['g4f', 'free'],
   ['codex', 'chatgpt'],
 ]);
-const SUPPORTED_BACKENDS = new Set(['free', 'chatgpt', 'claude', 'gemini']);
+const SUPPORTED_BACKENDS = new Set(['free', 'chatgpt', 'claude', 'gemini', 'gigachat']);
 const DEFAULT_TARIFFS = [
   {
     id: 'starter',
@@ -203,6 +203,22 @@ export const config = {
     provider: '',
     generatePath: '/generate',
     useResponses: false,
+  },
+  gigachat: {
+    oauthUrl: (
+      process.env.GIGACHAT_OAUTH_URL
+      ?? 'https://ngw.devices.sberbank.ru:9443/api/v2/oauth'
+    ).trim(),
+    baseUrl: trimTrailingSlashes(
+      (
+        process.env.GIGACHAT_BASE_URL
+        ?? 'https://gigachat.devices.sberbank.ru/api/v1'
+      ).trim(),
+    ),
+    authKey: (process.env.GIGACHAT_AUTH_KEY ?? '').trim(),
+    model: (process.env.GIGACHAT_MODEL ?? 'GigaChat').trim(),
+    scope: (process.env.GIGACHAT_SCOPE ?? 'GIGACHAT_API_PERS').trim(),
+    rejectUnauthorized: parseBoolean(process.env.GIGACHAT_REJECT_UNAUTHORIZED, true),
   },
   codexSessionFile: path.resolve(
     process.cwd(),

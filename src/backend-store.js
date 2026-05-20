@@ -2,7 +2,7 @@ const BACKEND_ALIASES = new Map([
   ['g4f', 'free'],
   ['codex', 'chatgpt'],
 ]);
-const SUPPORTED_BACKENDS = new Set(['free', 'chatgpt', 'claude', 'gemini']);
+const SUPPORTED_BACKENDS = new Set(['free', 'chatgpt', 'claude', 'gemini', 'gigachat']);
 
 function normalizeBackend(backend) {
   const normalized = String(backend ?? '').trim().toLowerCase();

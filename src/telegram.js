@@ -2,6 +2,7 @@ import { Bot, InlineKeyboard } from 'grammy';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { config, validateTelegramConfig } from './config.js';
 import { G4FClient } from './g4f-client.js';
+import { GigaChatClient } from './gigachat-client.js';
 import { BackendStore } from './backend-store.js';
 import { CodexSessionStore } from './codex-session-store.js';
 import { ConversationStore } from './history.js';
@@ -32,9 +33,13 @@ const BACKENDS = {
     title: 'Gemini',
     description: 'Pro High через anti-api',
   },
+  gigachat: {
+    title: 'GigaChat',
+    description: 'GigaChat API',
+  },
 };
 const PUBLIC_BACKEND_IDS = ['free', 'chatgpt'];
-const PRIVATE_BACKEND_IDS = ['claude', 'gemini'];
+const PRIVATE_BACKEND_IDS = ['claude', 'gemini', 'gigachat'];
 const BACKEND_IDS = [...PUBLIC_BACKEND_IDS, ...PRIVATE_BACKEND_IDS];
 const PUBLIC_TARIFFS = config.tariffs.filter((tariff) => tariff.isPublic);
 const PRIVATE_BACKEND_USER_IDS = new Set(config.privateBackends.userIds);
@@ -201,6 +206,7 @@ function getModeText(activeBackend, user = null) {
   if (isPrivateBackendAllowed(user)) {
     lines.push('3. Claude: приватный режим владельца.');
     lines.push('4. Gemini: приватный режим владельца.');
+    lines.push('5. GigaChat: приватный режим владельца.');
   }
 
   lines.push('Для каждого режима хранится свой контекст, поэтому можно спокойно переключаться между ними.');
@@ -385,6 +391,7 @@ const clients = {
   chatgpt: new G4FClient(config.codex),
   claude: new G4FClient(config.antiClaude),
   gemini: new G4FClient(config.antiGemini),
+  gigachat: new GigaChatClient(config.gigachat),
 };
 const history = new ConversationStore(config.maxHistoryMessages);
 const backendStore = new BackendStore(config.defaultBackend);

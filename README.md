@@ -14,7 +14,7 @@
 - Для `Free` и `Chat GPT` хранится отдельный контекст диалога
 - Есть команды `/start`, `/help`, `/mode`, `/tariff`, `/reset`
 - Режим можно переключать через inline-меню прямо в чате
-- Приватные режимы `Claude` и `Gemini` можно включить только для owner-аккаунтов через `PRIVATE_BACKEND_USER_IDS`
+- Приватные режимы `Claude`, `Gemini` и `GigaChat` можно включить только для owner-аккаунтов через `PRIVATE_BACKEND_USER_IDS`
 - Пользователь может оставить заявку на тариф через `/tariff`; прямое переключение тарифа в боте отключено
 - Бот сохраняет метрики по пользователям, чатам, backend и токенам
 - Есть отдельный web-admin процесс для просмотра статистики и управления лимитами
@@ -53,6 +53,10 @@ CODEX_SESSION_FILE=data/codex-sessions.json
 ANTI_API_BASE_URL=http://127.0.0.1:8964
 ANTI_API_CLAUDE_MODEL=route:claude
 ANTI_API_GEMINI_MODEL=gemini-3.1-pro-high
+
+GIGACHAT_AUTH_KEY=base64_client_id_client_secret
+GIGACHAT_MODEL=GigaChat
+GIGACHAT_SCOPE=GIGACHAT_API_PERS
 ```
 
 ### Если ваш `g4f`-сервер использует backend API
@@ -120,7 +124,7 @@ npm run start:admin
 
 - `/start` - приветствие и сброс текущего контекста
 - `/help` - короткая справка
-- `/mode` - открыть меню переключения между `Free` и `Chat GPT`; owner-аккаунтам дополнительно видны `Claude` и `Gemini`
+- `/mode` - открыть меню переключения между `Free` и `Chat GPT`; owner-аккаунтам дополнительно видны `Claude`, `Gemini` и `GigaChat`
 - `/tariff` - посмотреть остаток токенов и оставить заявку на желаемый тариф
 - `/reset` - очистить историю диалога для обоих режимов
 
