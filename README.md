@@ -14,6 +14,7 @@
 - Для `Free` и `Chat GPT` хранится отдельный контекст диалога
 - Есть команды `/start`, `/help`, `/mode`, `/tariff`, `/reset`
 - Режим можно переключать через inline-меню прямо в чате
+- Приватные режимы `Claude` и `Gemini` можно включить только для owner-аккаунтов через `PRIVATE_BACKEND_USER_IDS`
 - Пользователь может оставить заявку на тариф через `/tariff`; прямое переключение тарифа в боте отключено
 - Бот сохраняет метрики по пользователям, чатам, backend и токенам
 - Есть отдельный web-admin процесс для просмотра статистики и управления лимитами
@@ -33,6 +34,7 @@ DEFAULT_BACKEND=chatgpt
 TELEGRAM_BOT_TOKEN=123456:telegram_token
 TELEGRAM_PROXY_URL=
 PAYMENT_REQUEST_TELEGRAM_CHAT_ID=123456789
+PRIVATE_BACKEND_USER_IDS=4976849,tg:user:248192426
 TOKEN_CYCLE_DAYS=30
 DEFAULT_TARIFF_ID=starter
 TARIFFS_JSON=[{"id":"starter","name":"Старт","description":"Для редких обращений и тестов.","priceText":"0 ₽","monthlyTokens":50000,"isPublic":true},{"id":"plus","name":"Плюс","description":"Для ежедневной работы с ботом.","priceText":"990 ₽","monthlyTokens":300000,"isPublic":true},{"id":"pro","name":"Про","description":"Для активного использования и длинных диалогов.","priceText":"3 990 ₽","monthlyTokens":1500000,"isPublic":true}]
@@ -47,6 +49,10 @@ CODEX_API_KEY=sk-clb-...
 CODEX_MODEL=gpt-5.3-codex
 CODEX_USE_RESPONSES=true
 CODEX_SESSION_FILE=data/codex-sessions.json
+
+ANTI_API_BASE_URL=http://127.0.0.1:8964
+ANTI_API_CLAUDE_MODEL=route:claude
+ANTI_API_GEMINI_MODEL=gemini-3.1-pro-high
 ```
 
 ### Если ваш `g4f`-сервер использует backend API
@@ -114,7 +120,7 @@ npm run start:admin
 
 - `/start` - приветствие и сброс текущего контекста
 - `/help` - короткая справка
-- `/mode` - открыть меню переключения между `Free` и `Chat GPT`
+- `/mode` - открыть меню переключения между `Free` и `Chat GPT`; owner-аккаунтам дополнительно видны `Claude` и `Gemini`
 - `/tariff` - посмотреть остаток токенов и оставить заявку на желаемый тариф
 - `/reset` - очистить историю диалога для обоих режимов
 
@@ -156,6 +162,8 @@ ADMIN_PASSWORD=change_me
 По умолчанию цикл лимита длится `30` дней. Пользователь может оставить заявку на публичный тариф прямо в боте через `/tariff`, а администратор вручную меняет тариф, добавляет токены, убирает токены, блокирует доступ и сбрасывает цикл в админке.
 
 `PAYMENT_REQUEST_TELEGRAM_CHAT_ID` - один или несколько Telegram chat id через запятую, куда бот отправляет заявки на тарифы.
+
+`PRIVATE_BACKEND_USER_IDS` - один или несколько user id через запятую, для которых показываются приватные режимы. Для MAX можно указывать обычный числовой id, например `4976849`; для Telegram используйте формат `tg:user:248192426`.
 
 ## Что важно
 

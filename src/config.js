@@ -6,7 +6,7 @@ const BACKEND_ALIASES = new Map([
   ['g4f', 'free'],
   ['codex', 'chatgpt'],
 ]);
-const SUPPORTED_BACKENDS = new Set(['free', 'chatgpt']);
+const SUPPORTED_BACKENDS = new Set(['free', 'chatgpt', 'claude', 'gemini']);
 const DEFAULT_TARIFFS = [
   {
     id: 'starter',
@@ -156,6 +156,10 @@ function parseTariffs(value) {
 
 const tariffs = parseTariffs(process.env.TARIFFS_JSON ?? '');
 const defaultTariffId = (process.env.DEFAULT_TARIFF_ID ?? tariffs[0]?.id ?? 'starter').trim().toLowerCase();
+const antiApiBaseUrl = trimTrailingSlashes(
+  (process.env.ANTI_API_BASE_URL ?? 'http://127.0.0.1:8964').trim() || 'http://127.0.0.1:8964',
+);
+const antiApiKey = (process.env.ANTI_API_API_KEY ?? '').trim();
 
 export const config = {
   maxBotToken: (process.env.MAX_BOT_TOKEN ?? '').trim(),
@@ -182,6 +186,24 @@ export const config = {
     generatePath: '/generate',
     useResponses: true,
   }),
+  antiClaude: {
+    baseUrl: antiApiBaseUrl,
+    mode: 'openai',
+    apiKey: antiApiKey,
+    model: (process.env.ANTI_API_CLAUDE_MODEL ?? 'route:claude').trim(),
+    provider: '',
+    generatePath: '/generate',
+    useResponses: false,
+  },
+  antiGemini: {
+    baseUrl: antiApiBaseUrl,
+    mode: 'openai',
+    apiKey: antiApiKey,
+    model: (process.env.ANTI_API_GEMINI_MODEL ?? 'gemini-3.1-pro-high').trim(),
+    provider: '',
+    generatePath: '/generate',
+    useResponses: false,
+  },
   codexSessionFile: path.resolve(
     process.cwd(),
     (process.env.CODEX_SESSION_FILE ?? 'data/codex-sessions.json').trim() || 'data/codex-sessions.json',
@@ -196,6 +218,13 @@ export const config = {
     telegramChatIds: parseStringList(
       process.env.PAYMENT_REQUEST_TELEGRAM_CHAT_ID
       ?? process.env.PAYMENT_REQUEST_CHAT_ID
+      ?? '',
+    ),
+  },
+  privateBackends: {
+    userIds: parseStringList(
+      process.env.PRIVATE_BACKEND_USER_IDS
+      ?? process.env.OWNER_USER_IDS
       ?? '',
     ),
   },

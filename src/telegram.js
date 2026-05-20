@@ -24,9 +24,20 @@ const BACKENDS = {
     title: 'Chat GPT',
     description: 'codex-lb',
   },
+  claude: {
+    title: 'Claude',
+    description: 'Opus через anti-api',
+  },
+  gemini: {
+    title: 'Gemini',
+    description: 'Pro High через anti-api',
+  },
 };
-const BACKEND_IDS = ['free', 'chatgpt'];
+const PUBLIC_BACKEND_IDS = ['free', 'chatgpt'];
+const PRIVATE_BACKEND_IDS = ['claude', 'gemini'];
+const BACKEND_IDS = [...PUBLIC_BACKEND_IDS, ...PRIVATE_BACKEND_IDS];
 const PUBLIC_TARIFFS = config.tariffs.filter((tariff) => tariff.isPublic);
+const PRIVATE_BACKEND_USER_IDS = new Set(config.privateBackends.userIds);
 
 function formatNumber(value) {
   return new Intl.NumberFormat('ru-RU').format(Number(value || 0));
@@ -113,14 +124,50 @@ function getChatData(ctx) {
   };
 }
 
-function getModeKeyboard(activeBackend) {
+function isPrivateBackendAllowed(user) {
+  if (!user) {
+    return false;
+  }
+
+  const rawId = String(user.userId);
+  const platform = String(user.platform ?? '').trim().toLowerCase();
+  const candidates = new Set([
+    rawId,
+    rawId.replace(/^tg:user:/, ''),
+    `${platform}:${rawId}`,
+    `${platform}:user:${rawId}`,
+  ]);
+
+  return [...candidates].some((candidate) => PRIVATE_BACKEND_USER_IDS.has(candidate));
+}
+
+function getAllowedBackendIds(user) {
+  return isPrivateBackendAllowed(user)
+    ? BACKEND_IDS
+    : PUBLIC_BACKEND_IDS;
+}
+
+function resolveVisibleBackend(activeBackend, user) {
+  const allowedBackendIds = getAllowedBackendIds(user);
+  if (allowedBackendIds.includes(activeBackend)) {
+    return activeBackend;
+  }
+
+  return allowedBackendIds.includes(config.defaultBackend)
+    ? config.defaultBackend
+    : PUBLIC_BACKEND_IDS[0];
+}
+
+function getModeKeyboard(activeBackend, user = null) {
   const keyboard = new InlineKeyboard();
 
-  BACKEND_IDS.forEach((backendId, index) => {
+  const allowedBackendIds = getAllowedBackendIds(user);
+
+  allowedBackendIds.forEach((backendId, index) => {
     const label = activeBackend === backendId ? `${BACKENDS[backendId].title} ✓` : BACKENDS[backendId].title;
     keyboard.text(label, `mode:${backendId}`);
 
-    if (index % 2 === 1 && index < BACKEND_IDS.length - 1) {
+    if (index % 2 === 1 && index < allowedBackendIds.length - 1) {
       keyboard.row();
     }
   });
@@ -143,14 +190,22 @@ function getTariffKeyboard(activeTariffId) {
   return keyboard;
 }
 
-function getModeText(activeBackend) {
-  return [
+function getModeText(activeBackend, user = null) {
+  const lines = [
     'Выберите режим ответа.',
     `Сейчас активно: ${BACKENDS[activeBackend].title}.`,
     '1. Free: g4f, без списания токенов тарифа.',
     '2. Chat GPT: codex-lb, расходует токены тарифа.',
-    'Для каждого режима хранится свой контекст, поэтому можно спокойно переключаться между ними.',
-  ].join('\n');
+  ];
+
+  if (isPrivateBackendAllowed(user)) {
+    lines.push('3. Claude: приватный режим владельца.');
+    lines.push('4. Gemini: приватный режим владельца.');
+  }
+
+  lines.push('Для каждого режима хранится свой контекст, поэтому можно спокойно переключаться между ними.');
+
+  return lines.join('\n');
 }
 
 function getTariffText(quota) {
@@ -262,10 +317,12 @@ function startTypingLoop(ctx, intervalMs = 4_000) {
 }
 
 async function sendModeMenu(ctx, activeBackend, introText = '') {
-  const text = introText ? `${introText}\n\n${getModeText(activeBackend)}` : getModeText(activeBackend);
+  const user = getUserData(ctx);
+  const visibleBackend = resolveVisibleBackend(activeBackend, user);
+  const text = introText ? `${introText}\n\n${getModeText(visibleBackend, user)}` : getModeText(visibleBackend, user);
 
   await replyText(ctx, text, {
-    reply_markup: getModeKeyboard(activeBackend),
+    reply_markup: getModeKeyboard(visibleBackend, user),
   });
 }
 
@@ -326,6 +383,8 @@ const bot = new Bot(config.telegramBotToken, {
 const clients = {
   free: new G4FClient(config.g4f),
   chatgpt: new G4FClient(config.codex),
+  claude: new G4FClient(config.antiClaude),
+  gemini: new G4FClient(config.antiGemini),
 };
 const history = new ConversationStore(config.maxHistoryMessages);
 const backendStore = new BackendStore(config.defaultBackend);
@@ -500,6 +559,15 @@ bot.command('tariff', async (ctx) => {
 for (const backendId of BACKEND_IDS) {
   bot.callbackQuery(new RegExp(`^mode:${backendId}$`), async (ctx) => {
     const conversationKey = getConversationKey(ctx);
+    const user = getUserData(ctx);
+    const allowedBackendIds = getAllowedBackendIds(user);
+
+    if (!allowedBackendIds.includes(backendId)) {
+      await ctx.answerCallbackQuery({ text: 'Этот режим доступен только владельцу.' }).catch(() => {});
+      await sendModeMenu(ctx, resolveVisibleBackend(backendStore.get(conversationKey), user));
+      return;
+    }
+
     const previousBackend = backendStore.get(conversationKey);
     const nextBackend = backendId;
     const changed = previousBackend !== nextBackend;
@@ -507,9 +575,9 @@ for (const backendId of BACKEND_IDS) {
     backendStore.set(conversationKey, nextBackend);
     await trackInteraction(ctx, nextBackend);
 
-    const text = getModeText(nextBackend);
+    const text = getModeText(nextBackend, user);
     const extra = {
-      reply_markup: getModeKeyboard(nextBackend),
+      reply_markup: getModeKeyboard(nextBackend, user),
     };
     const notification = changed
       ? `Режим переключен на ${BACKENDS[nextBackend].title}.`
@@ -615,11 +683,15 @@ bot.on('message', async (ctx) => {
   }
 
   const conversationKey = getConversationKey(ctx);
-  const activeBackend = backendStore.get(conversationKey);
+  const user = getUserData(ctx);
+  const storedBackend = backendStore.get(conversationKey);
+  const activeBackend = resolveVisibleBackend(storedBackend, user);
+  if (activeBackend !== storedBackend) {
+    backendStore.set(conversationKey, activeBackend);
+  }
   const backend = BACKENDS[activeBackend];
   const client = clients[activeBackend];
   const historyKey = getBackendHistoryKey(conversationKey, activeBackend);
-  const user = getUserData(ctx);
   await trackInteraction(ctx, activeBackend);
   const hasImage = Boolean(imageInput);
   const requestText = buildRequestPreview(text, hasImage);
