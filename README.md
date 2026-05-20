@@ -1,6 +1,6 @@
-# MAX and Telegram bots -> g4f / codex-lb
+# MAX and Telegram bots -> Free / Chat GPT
 
-Боты для MAX и Telegram, которые принимают текстовые сообщения и умеют отправлять их либо на ваш `g4f`-сервер, либо в `codex-lb` по API ключу.
+Боты для MAX и Telegram, которые принимают сообщения и умеют отправлять их либо в бесплатный `g4f`-режим, либо в `codex-lb` по API ключу.
 
 ## Что уже сделано
 
@@ -11,14 +11,16 @@
   - `backend-api` -> `POST /backend-api/v2/conversation`
   - `openai` -> `POST /v1/chat/completions`
   - `cryptosmi` -> `POST /generate` на кастомный сервер
-- Для `g4f` и `codex-lb` хранится отдельный контекст диалога
+- Для `Free` и `Chat GPT` хранится отдельный контекст диалога
 - Есть команды `/start`, `/help`, `/mode`, `/tariff`, `/reset`
 - Режим можно переключать через inline-меню прямо в чате
+- Пользователь может оставить заявку на тариф через `/tariff`; прямое переключение тарифа в боте отключено
 - Бот сохраняет метрики по пользователям, чатам, backend и токенам
 - Есть отдельный web-admin процесс для просмотра статистики и управления лимитами
 - Метрики и лимиты общие для MAX и Telegram, но пользователи хранятся раздельно по платформам
 - Длинные ответы режутся на части под лимит MAX
 - Для `codex-lb` можно держать одну живую server-side сессию через `responses` API
+- Режим `Free` не списывает токены из пользовательской квоты, а `Chat GPT` списывает
 
 ## Настройка
 
@@ -27,9 +29,10 @@
 ### Минимальная конфигурация для двух режимов сразу
 
 ```env
-DEFAULT_BACKEND=g4f
+DEFAULT_BACKEND=chatgpt
 TELEGRAM_BOT_TOKEN=123456:telegram_token
 TELEGRAM_PROXY_URL=
+PAYMENT_REQUEST_TELEGRAM_CHAT_ID=123456789
 TOKEN_CYCLE_DAYS=30
 DEFAULT_TARIFF_ID=starter
 TARIFFS_JSON=[{"id":"starter","name":"Старт","description":"Для редких обращений и тестов.","priceText":"0 ₽","monthlyTokens":50000,"isPublic":true},{"id":"plus","name":"Плюс","description":"Для ежедневной работы с ботом.","priceText":"990 ₽","monthlyTokens":300000,"isPublic":true},{"id":"pro","name":"Про","description":"Для активного использования и длинных диалогов.","priceText":"3 990 ₽","monthlyTokens":1500000,"isPublic":true}]
@@ -111,8 +114,8 @@ npm run start:admin
 
 - `/start` - приветствие и сброс текущего контекста
 - `/help` - короткая справка
-- `/mode` - открыть меню переключения между `g4f` и `codex-lb`
-- `/tariff` - открыть меню тарифов и посмотреть остаток токенов
+- `/mode` - открыть меню переключения между `Free` и `Chat GPT`
+- `/tariff` - посмотреть остаток токенов и оставить заявку на желаемый тариф
 - `/reset` - очистить историю диалога для обоих режимов
 
 Telegram-бот использует те же команды и ту же логику квот, что и MAX-бот. Контекст и тарифы считаются отдельно для каждого Telegram-пользователя, а в группах контекст ведётся отдельно для каждого участника внутри чата.
@@ -143,13 +146,16 @@ RECENT_REQUESTS_LIMIT=200
 TOKEN_CYCLE_DAYS=30
 DEFAULT_TARIFF_ID=starter
 TARIFFS_JSON=[{"id":"starter","name":"Старт","description":"Для редких обращений и тестов.","priceText":"0 ₽","monthlyTokens":50000,"isPublic":true},{"id":"plus","name":"Плюс","description":"Для ежедневной работы с ботом.","priceText":"990 ₽","monthlyTokens":300000,"isPublic":true},{"id":"pro","name":"Про","description":"Для активного использования и длинных диалогов.","priceText":"3 990 ₽","monthlyTokens":1500000,"isPublic":true}]
+PAYMENT_REQUEST_TELEGRAM_CHAT_ID=123456789
 ADMIN_HOST=127.0.0.1
 ADMIN_PORT=3477
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=change_me
 ```
 
-По умолчанию цикл лимита длится `30` дней. Пользователь может переключать публичные тарифы прямо в боте через `/tariff`, а администратор может в админке менять тариф, добавлять токены, убирать токены, блокировать доступ и вручную сбрасывать цикл.
+По умолчанию цикл лимита длится `30` дней. Пользователь может оставить заявку на публичный тариф прямо в боте через `/tariff`, а администратор вручную меняет тариф, добавляет токены, убирает токены, блокирует доступ и сбрасывает цикл в админке.
+
+`PAYMENT_REQUEST_TELEGRAM_CHAT_ID` - один или несколько Telegram chat id через запятую, куда бот отправляет заявки на тарифы.
 
 ## Что важно
 

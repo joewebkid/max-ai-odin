@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
+const QUOTA_FREE_BACKENDS = new Set(['free', 'g4f']);
+
 function emptyBackendStats() {
   return {
     requestCount: 0,
@@ -555,7 +557,7 @@ export class MetricsStore {
           backendStats.errorCount += success ? 0 : 1;
           applyUsage(backendStats, normalizedUsage);
 
-          if (success && normalizedUsage.totalTokens > 0) {
+          if (success && normalizedUsage.totalTokens > 0 && !QUOTA_FREE_BACKENDS.has(String(backend))) {
             const membership = this.ensureMembershipUnlocked(userEntry.userId, nowIso);
             membership.cycleSpentTokens += normalizedUsage.totalTokens;
             membership.updatedAt = nowIso;

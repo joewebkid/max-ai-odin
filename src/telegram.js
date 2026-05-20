@@ -8,6 +8,10 @@ import { ConversationStore } from './history.js';
 import { DEFAULT_IMAGE_PROMPT, ImageInputError, extractTelegramImageInput } from './image-input.js';
 import { normalizeTextForMax } from './max-text-normalizer.js';
 import { MetricsStore } from './metrics-store.js';
+import {
+  buildPaymentRequestMessage,
+  sendPaymentRequestNotification,
+} from './payment-request-notifier.js';
 import { renderTelegramHtmlChunks } from './telegram-text.js';
 
 const TELEGRAM_MESSAGE_LENGTH = 3600;
@@ -20,16 +24,8 @@ const BACKENDS = {
     title: 'Chat GPT',
     description: 'codex-lb',
   },
-  claude: {
-    title: 'Claude',
-    description: 'Opus через anti-api',
-  },
-  gemini: {
-    title: 'Gemini',
-    description: 'Pro High через anti-api',
-  },
 };
-const BACKEND_IDS = ['free', 'chatgpt', 'claude', 'gemini'];
+const BACKEND_IDS = ['free', 'chatgpt'];
 const PUBLIC_TARIFFS = config.tariffs.filter((tariff) => tariff.isPublic);
 
 function formatNumber(value) {
@@ -137,7 +133,7 @@ function getTariffKeyboard(activeTariffId) {
 
   PUBLIC_TARIFFS.forEach((tariff, index) => {
     const label = activeTariffId === tariff.id ? `${tariff.name} ✓` : tariff.name;
-    keyboard.text(label, `tariff:${tariff.id}`);
+    keyboard.text(label, `tariff_request:${tariff.id}`);
 
     if (index % 2 === 1 && index < PUBLIC_TARIFFS.length - 1) {
       keyboard.row();
@@ -151,17 +147,15 @@ function getModeText(activeBackend) {
   return [
     'Выберите режим ответа.',
     `Сейчас активно: ${BACKENDS[activeBackend].title}.`,
-    '1. Free: g4f.',
-    '2. Chat GPT: codex-lb.',
-    '3. Claude: Opus через anti-api.',
-    '4. Gemini: Pro High через anti-api.',
+    '1. Free: g4f, без списания токенов тарифа.',
+    '2. Chat GPT: codex-lb, расходует токены тарифа.',
     'Для каждого режима хранится свой контекст, поэтому можно спокойно переключаться между ними.',
   ].join('\n');
 }
 
 function getTariffText(quota) {
   const lines = [
-    'Выберите тариф.',
+    'Выберите желаемый тариф для заявки.',
     '',
   ];
 
@@ -187,6 +181,9 @@ function getTariffText(quota) {
   if (quota.isBlocked) {
     lines.push('Доступ сейчас заблокирован администратором.');
   }
+
+  lines.push('');
+  lines.push('Нажмите на тариф, и я отправлю заявку администратору. Самостоятельная смена тарифа отключена.');
 
   return lines.join('\n');
 }
@@ -280,6 +277,29 @@ async function sendTariffMenu(ctx, quota, introText = '') {
   });
 }
 
+async function submitTariffRequest({
+  platform,
+  user,
+  chat,
+  tariff,
+  quota,
+}) {
+  const message = buildPaymentRequestMessage({
+    platform,
+    user,
+    chat,
+    tariff,
+    quota,
+  });
+
+  return sendPaymentRequestNotification({
+    botToken: config.telegramBotToken,
+    proxyUrl: config.telegramProxyUrl,
+    chatIds: config.paymentRequests.telegramChatIds,
+    message,
+  });
+}
+
 async function resetConversationHistory(history, codexSessionsStore, conversationKey) {
   for (const backendId of BACKEND_IDS) {
     const backendKey = getBackendHistoryKey(conversationKey, backendId);
@@ -306,8 +326,6 @@ const bot = new Bot(config.telegramBotToken, {
 const clients = {
   free: new G4FClient(config.g4f),
   chatgpt: new G4FClient(config.codex),
-  claude: new G4FClient(config.antiClaude),
-  gemini: new G4FClient(config.antiGemini),
 };
 const history = new ConversationStore(config.maxHistoryMessages);
 const backendStore = new BackendStore(config.defaultBackend);
@@ -403,11 +421,11 @@ await bot.api.setMyCommands([
   },
   {
     command: 'mode',
-    description: 'Выбрать режим: Free / Chat GPT / Claude / Gemini',
+    description: 'Выбрать режим: Free или Chat GPT',
   },
   {
     command: 'tariff',
-    description: 'Посмотреть и выбрать тариф',
+    description: 'Посмотреть тариф и оставить заявку',
   },
 ]);
 
@@ -425,7 +443,7 @@ bot.command('start', async (ctx) => {
   await sendModeMenu(
     ctx,
     activeBackend,
-    'Бот готов. Отправьте текст, и я передам его через выбранный режим. Доступны Free, Chat GPT, Claude и Gemini. Команды: /help, /mode, /tariff и /reset.',
+    'Бот готов. Отправьте текст, и я передам его через выбранный режим. Доступны Free и Chat GPT. Команды: /help, /mode, /tariff и /reset.',
   );
 });
 
@@ -441,9 +459,9 @@ bot.command('help', async (ctx) => {
       'Как пользоваться:',
       '1. Отправьте обычное текстовое сообщение.',
       '2. Я передам его через активный режим и верну ответ.',
-      '3. /mode открывает меню переключения между Free, Chat GPT, Claude и Gemini.',
-      '4. /tariff открывает меню тарифов и показывает остаток токенов.',
-      '5. /reset очищает историю сразу для всех четырех режимов.',
+      '3. /mode открывает меню переключения между Free и Chat GPT.',
+      '4. /tariff показывает остаток токенов и отправляет заявку на тариф администратору.',
+      '5. /reset очищает историю для обоих режимов.',
     ].join('\n'),
   );
 });
@@ -455,7 +473,7 @@ bot.command('reset', async (ctx) => {
 
   await resetConversationHistory(history, codexSessions, conversationKey);
 
-  await sendModeMenu(ctx, activeBackend, 'История диалога очищена для Free, Chat GPT, Claude и Gemini.');
+  await sendModeMenu(ctx, activeBackend, 'История диалога очищена для Free и Chat GPT.');
 });
 
 bot.command('mode', async (ctx) => {
@@ -511,7 +529,7 @@ for (const backendId of BACKEND_IDS) {
 }
 
 for (const tariff of PUBLIC_TARIFFS) {
-  bot.callbackQuery(new RegExp(`^tariff:${tariff.id}$`), async (ctx) => {
+  bot.callbackQuery(new RegExp(`^tariff_request:${tariff.id}$`), async (ctx) => {
     const user = getUserData(ctx);
 
     if (!user) {
@@ -519,13 +537,40 @@ for (const tariff of PUBLIC_TARIFFS) {
       return;
     }
 
-    const quota = await metrics.setUserPlan(user.userId, tariff.id);
-    const text = getTariffText(quota);
+    const quota = await metrics.getUserQuota(user.userId);
+    const chat = getChatData(ctx);
+
+    try {
+      const notifyResult = await submitTariffRequest({
+        platform: 'telegram',
+        user,
+        chat,
+        tariff,
+        quota,
+      });
+
+      if (!notifyResult.sent) {
+        await ctx.answerCallbackQuery({ text: 'Прием заявок пока не настроен.' }).catch(() => {});
+        await replyText(ctx, 'Сейчас прием заявок не настроен. Напишите администратору напрямую.');
+        return;
+      }
+    } catch (error) {
+      console.error('Failed to send tariff request:', error);
+      await ctx.answerCallbackQuery({ text: 'Не удалось отправить заявку.' }).catch(() => {});
+      await replyText(ctx, 'Не удалось отправить заявку. Попробуйте позже или напишите администратору напрямую.');
+      return;
+    }
+
+    const text = [
+      `Заявка на тариф ${tariff.name} отправлена администратору.`,
+      '',
+      getTariffText(quota),
+    ].join('\n');
     const extra = {
       reply_markup: getTariffKeyboard(quota.planId),
     };
 
-    await ctx.answerCallbackQuery({ text: `Тариф переключен на ${quota.planName}.` }).catch(() => {});
+    await ctx.answerCallbackQuery({ text: 'Заявка отправлена.' }).catch(() => {});
 
     if (ctx.callbackQuery.message) {
       await editTextMessage(ctx, text, extra).catch(async () => {
@@ -587,11 +632,11 @@ bot.on('message', async (ctx) => {
       return;
     }
 
-    if (quota.remainingTokens <= 0) {
+    if (activeBackend !== config.freeBackendId && quota.remainingTokens <= 0) {
       await sendTariffMenu(
         ctx,
         quota,
-        'Лимит токенов на текущем тарифе исчерпан. Выберите другой тариф или попросите администратора увеличить лимит.',
+        'Лимит токенов на текущем тарифе исчерпан. Оставьте заявку на другой тариф или попросите администратора увеличить лимит.',
       );
       return;
     }
