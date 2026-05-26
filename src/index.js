@@ -7,7 +7,7 @@ import { CodexTranscriptionClient } from './codex-transcription-client.js';
 import { BackendStore } from './backend-store.js';
 import { CodexSessionStore } from './codex-session-store.js';
 import { ConversationStore } from './history.js';
-import { AudioInputError, extractMaxAudioInput } from './audio-input.js';
+import { AudioInputError, extractMaxAudioInput, extractMaxAudioTranscript } from './audio-input.js';
 import { DEFAULT_IMAGE_PROMPT, ImageInputError, extractMaxImageInput } from './image-input.js';
 import { normalizeTextForMax } from './max-text-normalizer.js';
 import { MetricsStore } from './metrics-store.js';
@@ -146,6 +146,18 @@ function startTypingLoop(ctx, intervalMs = 4_000) {
 
 function getIncomingText(ctx) {
   return ctx.message?.body?.text?.trim() ?? '';
+}
+
+function markMaxMessageProcessed(messageId) {
+  if (!messageId) {
+    return;
+  }
+
+  processedMaxMessageIds.add(messageId);
+
+  if (processedMaxMessageIds.size > 1_000) {
+    processedMaxMessageIds.delete(processedMaxMessageIds.values().next().value);
+  }
 }
 
 function formatNumber(value) {
@@ -384,6 +396,7 @@ const metrics = new MetricsStore(
   config.tokenCycleDays,
 );
 const pendingConversations = new Set();
+const processedMaxMessageIds = new Set();
 
 await metrics.init();
 await codexSessions.init();
@@ -717,8 +730,18 @@ for (const tariff of PUBLIC_TARIFFS) {
   });
 }
 
-bot.on('message_created', async (ctx) => {
+async function handleMaxMessage(ctx) {
   if (ctx.message?.sender?.is_bot) {
+    return;
+  }
+
+  const nativeAudioTranscript = extractMaxAudioTranscript(ctx);
+
+  if (ctx.updateType === 'message_edited' && !nativeAudioTranscript) {
+    return;
+  }
+
+  if (ctx.messageId && processedMaxMessageIds.has(ctx.messageId)) {
     return;
   }
 
@@ -737,17 +760,19 @@ bot.on('message_created', async (ctx) => {
     throw error;
   }
 
-  try {
-    audioInput = await extractMaxAudioInput(ctx, {
-      maxBytes: config.audio.maxBytes,
-    });
-  } catch (error) {
-    if (error instanceof AudioInputError) {
-      await replyText(ctx, error.message);
-      return;
-    }
+  if (!nativeAudioTranscript) {
+    try {
+      audioInput = await extractMaxAudioInput(ctx, {
+        maxBytes: config.audio.maxBytes,
+      });
+    } catch (error) {
+      if (error instanceof AudioInputError) {
+        await replyText(ctx, error.message);
+        return;
+      }
 
-    throw error;
+      throw error;
+    }
   }
 
   if (imageInput && audioInput) {
@@ -755,12 +780,12 @@ bot.on('message_created', async (ctx) => {
     return;
   }
 
-  if (!text && !imageInput && !audioInput) {
+  if (!text && !imageInput && !audioInput && !nativeAudioTranscript) {
     await replyText(ctx, 'Пока я умею работать с текстом, изображениями в Chat GPT и короткими аудио/голосовыми сообщениями.');
     return;
   }
 
-  if (text && text.startsWith('/') && !imageInput && !audioInput) {
+  if (text && text.startsWith('/') && !imageInput && !audioInput && !nativeAudioTranscript) {
     return;
   }
 
@@ -777,7 +802,8 @@ bot.on('message_created', async (ctx) => {
   await trackInteraction(ctx, activeBackend);
   const hasImage = Boolean(imageInput);
   const hasAudio = Boolean(audioInput);
-  let requestText = buildRequestPreview(text, hasImage, hasAudio);
+  const hasNativeAudioTranscript = Boolean(nativeAudioTranscript);
+  let requestText = buildRequestPreview(text || nativeAudioTranscript, hasImage, hasAudio || hasNativeAudioTranscript);
 
   if (user) {
     const quota = await metrics.getUserQuota(user.userId);
@@ -817,7 +843,10 @@ bot.on('message_created', async (ctx) => {
     const startedAt = Date.now();
     let effectiveUserText = text || (hasImage ? DEFAULT_IMAGE_PROMPT : '');
 
-    if (hasAudio) {
+    if (hasNativeAudioTranscript) {
+      effectiveUserText = buildAudioPrompt(text, nativeAudioTranscript);
+      requestText = buildRequestPreview(effectiveUserText, hasImage, true);
+    } else if (hasAudio) {
       const transcription = await transcribeAudioInput(audioInput);
 
       if (!transcription.text) {
@@ -829,7 +858,7 @@ bot.on('message_created', async (ctx) => {
       requestText = buildRequestPreview(effectiveUserText, hasImage, hasAudio);
     }
 
-    const historyUserText = buildHistoryEntryText(effectiveUserText, hasImage, hasAudio);
+    const historyUserText = buildHistoryEntryText(effectiveUserText, hasImage, hasAudio || hasNativeAudioTranscript);
     let result;
 
     if (activeBackend === 'chatgpt' && hasImage) {
@@ -866,6 +895,7 @@ bot.on('message_created', async (ctx) => {
     history.append(historyKey, 'assistant', answer);
 
     await trackRequest(ctx, activeBackend, requestText, answer, result, durationMs, true);
+    markMaxMessageProcessed(ctx.messageId);
     stopTyping();
 
     await replyChunked(ctx, answer);
@@ -882,9 +912,11 @@ bot.on('message_created', async (ctx) => {
     stopTyping();
     pendingConversations.delete(conversationKey);
   }
-});
+}
+
+bot.on(['message_created', 'message_edited'], handleMaxMessage);
 
 console.log(`Starting MAX bot with default backend ${config.defaultBackend}...`);
 await bot.start({
-  allowedUpdates: ['bot_started', 'message_created', 'message_callback'],
+  allowedUpdates: ['bot_started', 'message_created', 'message_edited', 'message_callback'],
 });

@@ -99,6 +99,23 @@ function getMaxAttachmentPayloadValue(attachment, keys) {
   return '';
 }
 
+function getMaxAudioTranscriptionValue(attachment) {
+  const candidates = [
+    attachment?.payload?.transcription,
+    attachment?.transcription,
+    attachment?.payload?.transcript,
+    attachment?.transcript,
+  ];
+
+  for (const value of candidates) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return '';
+}
+
 function isMaxAudioAttachment(attachment) {
   const type = String(attachment?.type ?? '').toLowerCase();
 
@@ -114,6 +131,10 @@ function isMaxAudioAttachment(attachment) {
   const fileName = getMaxAttachmentPayloadValue(attachment, ['file_name', 'fileName', 'name']);
 
   return Boolean(normalizeContentType(mimeType, fileName));
+}
+
+function findMaxAudioAttachment(attachments) {
+  return attachments.find((attachment) => isMaxAudioAttachment(attachment)) ?? null;
 }
 
 async function downloadAudioBuffer(url, {
@@ -227,16 +248,18 @@ export async function extractMaxAudioInput(ctx, {
     return null;
   }
 
-  const audioAttachment = attachments.find((attachment) => (
-    isMaxAudioAttachment(attachment)
-    && getMaxAttachmentPayloadValue(attachment, ['url', 'download_url', 'downloadUrl', 'file_url', 'fileUrl'])
-  ));
+  const audioAttachment = findMaxAudioAttachment(attachments);
 
   if (!audioAttachment) {
     return null;
   }
 
   const url = getMaxAttachmentPayloadValue(audioAttachment, ['url', 'download_url', 'downloadUrl', 'file_url', 'fileUrl']);
+
+  if (!url) {
+    return null;
+  }
+
   const mimeType = getMaxAttachmentPayloadValue(audioAttachment, ['mime_type', 'mimeType', 'content_type', 'contentType']);
   const fileName = getMaxAttachmentPayloadValue(audioAttachment, ['file_name', 'fileName', 'name']);
   const audio = await downloadAudioBuffer(url, {
@@ -252,4 +275,20 @@ export async function extractMaxAudioInput(ctx, {
     fileName: fileName || url.split('/').pop() || 'audio',
     token: audioAttachment.payload?.token ?? null,
   };
+}
+
+export function extractMaxAudioTranscript(ctx) {
+  const attachments = ctx.message?.body?.attachments;
+
+  if (!Array.isArray(attachments)) {
+    return '';
+  }
+
+  const audioAttachment = findMaxAudioAttachment(attachments);
+
+  if (!audioAttachment) {
+    return '';
+  }
+
+  return getMaxAudioTranscriptionValue(audioAttachment);
 }
