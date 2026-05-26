@@ -2,9 +2,11 @@ import { Bot, Keyboard } from '@maxhub/max-bot-api';
 import { config, validateConfig } from './config.js';
 import { G4FClient } from './g4f-client.js';
 import { GigaChatClient } from './gigachat-client.js';
+import { SaluteSpeechClient } from './salutespeech-client.js';
 import { BackendStore } from './backend-store.js';
 import { CodexSessionStore } from './codex-session-store.js';
 import { ConversationStore } from './history.js';
+import { AudioInputError, extractMaxAudioInput } from './audio-input.js';
 import { DEFAULT_IMAGE_PROMPT, ImageInputError, extractMaxImageInput } from './image-input.js';
 import { normalizeTextForMax } from './max-text-normalizer.js';
 import { MetricsStore } from './metrics-store.js';
@@ -368,6 +370,7 @@ const clients = {
   gemini: new G4FClient(config.antiGemini),
   gigachat: new GigaChatClient(config.gigachat),
 };
+const speechClient = new SaluteSpeechClient(config.saluteSpeech);
 const history = new ConversationStore(config.maxHistoryMessages);
 const backendStore = new BackendStore(config.defaultBackend);
 const codexSessions = new CodexSessionStore(config.codexSessionFile);
@@ -415,8 +418,16 @@ async function trackRequest(ctx, backend, requestText, responseText, result, dur
   }
 }
 
-function buildRequestPreview(text, hasImage = false) {
+function buildRequestPreview(text, hasImage = false, hasAudio = false) {
   const normalizedText = String(text ?? '').trim();
+
+  if (hasImage && hasAudio && normalizedText) {
+    return `[image]\n[audio]\n${normalizedText}`;
+  }
+
+  if (hasImage && hasAudio) {
+    return '[image]\n[audio]';
+  }
 
   if (hasImage && normalizedText) {
     return `[image]\n${normalizedText}`;
@@ -426,11 +437,27 @@ function buildRequestPreview(text, hasImage = false) {
     return '[image]';
   }
 
+  if (hasAudio && normalizedText) {
+    return `[audio]\n${normalizedText}`;
+  }
+
+  if (hasAudio) {
+    return '[audio]';
+  }
+
   return normalizedText;
 }
 
-function buildHistoryEntryText(text, hasImage = false) {
+function buildHistoryEntryText(text, hasImage = false, hasAudio = false) {
   const normalizedText = String(text ?? '').trim();
+
+  if (hasImage && hasAudio && normalizedText) {
+    return `[Изображение]\n[Аудио]\n${normalizedText}`;
+  }
+
+  if (hasImage && hasAudio) {
+    return '[Изображение]\n[Аудио]';
+  }
 
   if (hasImage && normalizedText) {
     return `[Изображение]\n${normalizedText}`;
@@ -440,7 +467,36 @@ function buildHistoryEntryText(text, hasImage = false) {
     return '[Изображение]';
   }
 
+  if (hasAudio && normalizedText) {
+    return `[Аудио]\n${normalizedText}`;
+  }
+
+  if (hasAudio) {
+    return '[Аудио]';
+  }
+
   return normalizedText;
+}
+
+function buildAudioPrompt(userText, transcript) {
+  const normalizedUserText = String(userText ?? '').trim();
+  const normalizedTranscript = String(transcript ?? '').trim();
+
+  if (!normalizedUserText) {
+    return normalizedTranscript;
+  }
+
+  return [
+    normalizedUserText,
+    '',
+    'Распознанный текст аудио:',
+    normalizedTranscript,
+  ].join('\n');
+}
+
+function isSpeechRecognitionError(error) {
+  const message = String(error?.message ?? '').toLowerCase();
+  return message.includes('salutespeech');
 }
 
 bot.catch(async (error, ctx) => {
@@ -498,7 +554,7 @@ bot.command('start', async (ctx) => {
   await sendModeMenu(
     ctx,
     activeBackend,
-    'Бот готов. Отправьте текст, и я передам его через выбранный режим. Команды: /help, /mode, /tariff и /reset.',
+    'Бот готов. Отправьте текст или короткое голосовое, и я передам запрос через выбранный режим. Команды: /help, /mode, /tariff и /reset.',
   );
 });
 
@@ -512,8 +568,8 @@ bot.command('help', async (ctx) => {
     activeBackend,
     [
       'Как пользоваться:',
-      '1. Отправьте обычное текстовое сообщение.',
-      '2. Я передам его через активный режим и верну ответ.',
+      '1. Отправьте текст, голосовое или короткий аудиофайл.',
+      '2. Я распознаю аудио через SaluteSpeech и передам текст через активный режим.',
       '3. /mode открывает меню переключения между Free и Chat GPT.',
       '4. /tariff показывает остаток токенов и отправляет заявку на тариф администратору.',
       '5. /reset очищает историю для обоих режимов.',
@@ -654,6 +710,7 @@ bot.on('message_created', async (ctx) => {
 
   const text = getIncomingText(ctx);
   let imageInput = null;
+  let audioInput = null;
 
   try {
     imageInput = await extractMaxImageInput(ctx);
@@ -666,12 +723,28 @@ bot.on('message_created', async (ctx) => {
     throw error;
   }
 
-  if (!text && !imageInput) {
-    await replyText(ctx, 'Пока я умею работать только с текстовыми сообщениями.');
+  try {
+    audioInput = await extractMaxAudioInput(ctx);
+  } catch (error) {
+    if (error instanceof AudioInputError) {
+      await replyText(ctx, error.message);
+      return;
+    }
+
+    throw error;
+  }
+
+  if (imageInput && audioInput) {
+    await replyText(ctx, 'Отправьте изображение и аудио отдельными сообщениями, чтобы я обработал их корректно.');
     return;
   }
 
-  if (text && text.startsWith('/') && !imageInput) {
+  if (!text && !imageInput && !audioInput) {
+    await replyText(ctx, 'Пока я умею работать с текстом, изображениями в Chat GPT и короткими аудио/голосовыми сообщениями.');
+    return;
+  }
+
+  if (text && text.startsWith('/') && !imageInput && !audioInput) {
     return;
   }
 
@@ -687,7 +760,8 @@ bot.on('message_created', async (ctx) => {
   const historyKey = getBackendHistoryKey(conversationKey, activeBackend);
   await trackInteraction(ctx, activeBackend);
   const hasImage = Boolean(imageInput);
-  const requestText = buildRequestPreview(text, hasImage);
+  const hasAudio = Boolean(audioInput);
+  let requestText = buildRequestPreview(text, hasImage, hasAudio);
 
   if (user) {
     const quota = await metrics.getUserQuota(user.userId);
@@ -725,8 +799,21 @@ bot.on('message_created', async (ctx) => {
 
   try {
     const startedAt = Date.now();
-    const effectiveUserText = text || (hasImage ? DEFAULT_IMAGE_PROMPT : '');
-    const historyUserText = buildHistoryEntryText(effectiveUserText, hasImage);
+    let effectiveUserText = text || (hasImage ? DEFAULT_IMAGE_PROMPT : '');
+
+    if (hasAudio) {
+      const transcription = await speechClient.transcribeAudio(audioInput, config.requestTimeoutMs);
+
+      if (!transcription.text) {
+        await replyText(ctx, 'Не удалось распознать речь в аудио. Попробуйте записать голосовое ближе к микрофону или отправить аудио короче.');
+        return;
+      }
+
+      effectiveUserText = buildAudioPrompt(text, transcription.text);
+      requestText = buildRequestPreview(effectiveUserText, hasImage, hasAudio);
+    }
+
+    const historyUserText = buildHistoryEntryText(effectiveUserText, hasImage, hasAudio);
     let result;
 
     if (activeBackend === 'chatgpt' && hasImage) {
@@ -770,10 +857,11 @@ bot.on('message_created', async (ctx) => {
     console.error(`${backend.title} request failed:`, error);
     await trackRequest(ctx, activeBackend, requestText, '', null, null, false, error.message ?? 'unknown error');
     stopTyping();
-    await replyText(
-      ctx,
-      `Не получилось получить ответ через ${backend.title}. Проверьте настройки сервера и при необходимости переключитесь через /mode.`,
-    );
+    const errorText = isSpeechRecognitionError(error)
+      ? 'Не получилось распознать аудио через SaluteSpeech. Проверьте настройки сервера или попробуйте отправить запись короче.'
+      : `Не получилось получить ответ через ${backend.title}. Проверьте настройки сервера и при необходимости переключитесь через /mode.`;
+
+    await replyText(ctx, errorText);
   } finally {
     stopTyping();
     pendingConversations.delete(conversationKey);

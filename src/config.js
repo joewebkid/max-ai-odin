@@ -216,9 +216,22 @@ export const config = {
       ).trim(),
     ),
     authKey: (process.env.GIGACHAT_AUTH_KEY ?? '').trim(),
-    model: (process.env.GIGACHAT_MODEL ?? 'GigaChat').trim(),
+    model: (process.env.GIGACHAT_MODEL ?? 'GigaChat-2-Pro').trim(),
     scope: (process.env.GIGACHAT_SCOPE ?? 'GIGACHAT_API_PERS').trim(),
     rejectUnauthorized: parseBoolean(process.env.GIGACHAT_REJECT_UNAUTHORIZED, true),
+  },
+  saluteSpeech: {
+    oauthUrl: (
+      process.env.SALUTESPEECH_OAUTH_URL
+      ?? 'https://ngw.devices.sberbank.ru:9443/api/v2/oauth'
+    ).trim(),
+    recognizeUrl: (
+      process.env.SALUTESPEECH_RECOGNIZE_URL
+      ?? 'https://smartspeech.sber.ru/rest/v1/speech:recognize'
+    ).trim(),
+    authKey: (process.env.SALUTESPEECH_AUTH_KEY ?? '').trim(),
+    scope: (process.env.SALUTESPEECH_SCOPE ?? 'SALUTE_SPEECH_PERS').trim(),
+    rejectUnauthorized: parseBoolean(process.env.SALUTESPEECH_REJECT_UNAUTHORIZED, true),
   },
   codexSessionFile: path.resolve(
     process.cwd(),

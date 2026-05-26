@@ -22,6 +22,7 @@
 - Длинные ответы режутся на части под лимит MAX
 - Для `codex-lb` можно держать одну живую server-side сессию через `responses` API
 - Режим `Free` не списывает токены из пользовательской квоты, а `Chat GPT` списывает
+- Короткие голосовые и аудиофайлы распознаются через SaluteSpeech и дальше отправляются в выбранный режим
 
 ## Настройка
 
@@ -55,8 +56,11 @@ ANTI_API_CLAUDE_MODEL=route:claude
 ANTI_API_GEMINI_MODEL=gemini-3.1-pro-high
 
 GIGACHAT_AUTH_KEY=base64_client_id_client_secret
-GIGACHAT_MODEL=GigaChat
+GIGACHAT_MODEL=GigaChat-2-Pro
 GIGACHAT_SCOPE=GIGACHAT_API_PERS
+
+SALUTESPEECH_AUTH_KEY=base64_client_id_client_secret
+SALUTESPEECH_SCOPE=SALUTE_SPEECH_PERS
 ```
 
 ### Если ваш `g4f`-сервер использует backend API
@@ -129,6 +133,8 @@ npm run start:admin
 - `/reset` - очистить историю диалога для обоих режимов
 
 Telegram-бот использует те же команды и ту же логику квот, что и MAX-бот. Контекст и тарифы считаются отдельно для каждого Telegram-пользователя, а в группах контекст ведётся отдельно для каждого участника внутри чата.
+
+Голосовые и короткие аудиофайлы распознаются через SaluteSpeech REST `speech:recognize`, затем распознанный текст отправляется в активный режим. Синхронный REST-режим SaluteSpeech рассчитан на аудио до 2 МБ и примерно до 1 минуты; лучше всего подходят Telegram voice OGG/Opus, MP3, FLAC и WAV.
 
 Если включен `CODEX_USE_RESPONSES=true`, то для `codex-lb` бот использует `POST /v1/responses` и хранит `previous_response_id` по каждому чату в `CODEX_SESSION_FILE`. Это даёт настоящую continuity-сессию на стороне `codex-lb`, а не только локальную историю в памяти процесса.
 
