@@ -7,7 +7,12 @@ import { CodexTranscriptionClient } from './codex-transcription-client.js';
 import { BackendStore } from './backend-store.js';
 import { CodexSessionStore } from './codex-session-store.js';
 import { ConversationStore } from './history.js';
-import { AudioInputError, extractMaxAudioInput, extractMaxAudioTranscript } from './audio-input.js';
+import {
+  AudioInputError,
+  extractMaxAudioInput,
+  extractMaxAudioTranscript,
+  hasMaxAudioAttachment,
+} from './audio-input.js';
 import { DEFAULT_IMAGE_PROMPT, ImageInputError, extractMaxImageInput } from './image-input.js';
 import { normalizeTextForMax } from './max-text-normalizer.js';
 import { MetricsStore } from './metrics-store.js';
@@ -736,6 +741,7 @@ async function handleMaxMessage(ctx) {
   }
 
   const nativeAudioTranscript = extractMaxAudioTranscript(ctx);
+  const hasAudioAttachment = hasMaxAudioAttachment(ctx);
 
   if (ctx.updateType === 'message_edited' && !nativeAudioTranscript) {
     return;
@@ -777,6 +783,10 @@ async function handleMaxMessage(ctx) {
 
   if (imageInput && audioInput) {
     await replyText(ctx, 'Отправьте изображение и аудио отдельными сообщениями, чтобы я обработал их корректно.');
+    return;
+  }
+
+  if (ctx.updateType === 'message_created' && hasAudioAttachment && !text && !imageInput && !audioInput && !nativeAudioTranscript) {
     return;
   }
 

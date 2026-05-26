@@ -292,3 +292,13 @@ export function extractMaxAudioTranscript(ctx) {
 
   return getMaxAudioTranscriptionValue(audioAttachment);
 }
+
+export function hasMaxAudioAttachment(ctx) {
+  const attachments = ctx.message?.body?.attachments;
+
+  if (!Array.isArray(attachments)) {
+    return false;
+  }
+
+  return Boolean(findMaxAudioAttachment(attachments));
+}
