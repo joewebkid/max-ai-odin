@@ -3,6 +3,7 @@ import { config, validateConfig } from './config.js';
 import { G4FClient } from './g4f-client.js';
 import { GigaChatClient } from './gigachat-client.js';
 import { SaluteSpeechClient } from './salutespeech-client.js';
+import { CodexTranscriptionClient } from './codex-transcription-client.js';
 import { BackendStore } from './backend-store.js';
 import { CodexSessionStore } from './codex-session-store.js';
 import { ConversationStore } from './history.js';
@@ -371,6 +372,7 @@ const clients = {
   gigachat: new GigaChatClient(config.gigachat),
 };
 const speechClient = new SaluteSpeechClient(config.saluteSpeech);
+const codexTranscriptionClient = new CodexTranscriptionClient(config.codexTranscription);
 const history = new ConversationStore(config.maxHistoryMessages);
 const backendStore = new BackendStore(config.defaultBackend);
 const codexSessions = new CodexSessionStore(config.codexSessionFile);
@@ -496,7 +498,19 @@ function buildAudioPrompt(userText, transcript) {
 
 function isSpeechRecognitionError(error) {
   const message = String(error?.message ?? '').toLowerCase();
-  return message.includes('salutespeech');
+  return message.includes('salutespeech') || message.includes('codex transcription');
+}
+
+async function transcribeAudioInput(audioInput) {
+  if (audioInput.sizeBytes <= config.audio.saluteSpeechMaxBytes && config.saluteSpeech.authKey) {
+    try {
+      return await speechClient.transcribeAudio(audioInput, config.audioTranscriptionTimeoutMs);
+    } catch (error) {
+      console.warn('SaluteSpeech transcription failed, falling back to codex-lb:', error);
+    }
+  }
+
+  return codexTranscriptionClient.transcribeAudio(audioInput, config.audioTranscriptionTimeoutMs);
 }
 
 bot.catch(async (error, ctx) => {
@@ -724,7 +738,9 @@ bot.on('message_created', async (ctx) => {
   }
 
   try {
-    audioInput = await extractMaxAudioInput(ctx);
+    audioInput = await extractMaxAudioInput(ctx, {
+      maxBytes: config.audio.maxBytes,
+    });
   } catch (error) {
     if (error instanceof AudioInputError) {
       await replyText(ctx, error.message);
@@ -802,10 +818,10 @@ bot.on('message_created', async (ctx) => {
     let effectiveUserText = text || (hasImage ? DEFAULT_IMAGE_PROMPT : '');
 
     if (hasAudio) {
-      const transcription = await speechClient.transcribeAudio(audioInput, config.requestTimeoutMs);
+      const transcription = await transcribeAudioInput(audioInput);
 
       if (!transcription.text) {
-        await replyText(ctx, 'Не удалось распознать речь в аудио. Попробуйте записать голосовое ближе к микрофону или отправить аудио короче.');
+        await replyText(ctx, 'Не удалось распознать речь в аудио. Попробуйте записать голосовое ближе к микрофону или отправить запись в другом формате.');
         return;
       }
 
@@ -858,7 +874,7 @@ bot.on('message_created', async (ctx) => {
     await trackRequest(ctx, activeBackend, requestText, '', null, null, false, error.message ?? 'unknown error');
     stopTyping();
     const errorText = isSpeechRecognitionError(error)
-      ? 'Не получилось распознать аудио через SaluteSpeech. Проверьте настройки сервера или попробуйте отправить запись короче.'
+      ? 'Не получилось распознать аудио. Короткие записи идут через SaluteSpeech, длинные через codex-lb; проверьте настройки сервера или отправьте файл короче.'
       : `Не получилось получить ответ через ${backend.title}. Проверьте настройки сервера и при необходимости переключитесь через /mode.`;
 
     await replyText(ctx, errorText);

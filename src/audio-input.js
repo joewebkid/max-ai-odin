@@ -1,7 +1,7 @@
 import nodeFetch from 'node-fetch';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
-const DEFAULT_MAX_AUDIO_BYTES = 2 * 1024 * 1024;
+const DEFAULT_MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const TELEGRAM_FILE_BASE_URL = 'https://api.telegram.org/file';
 const AUDIO_EXTENSION_TO_CONTENT_TYPE = new Map([
   ['.oga', 'audio/ogg;codecs=opus'],
@@ -13,6 +13,10 @@ const AUDIO_EXTENSION_TO_CONTENT_TYPE = new Map([
   ['.wav', 'audio/x-pcm;bit=16;rate=16000'],
   ['.pcm', 'audio/x-pcm;bit=16;rate=16000'],
 ]);
+
+function formatMegabytes(bytes) {
+  return Math.floor(bytes / (1024 * 1024));
+}
 
 export class AudioInputError extends Error {
   constructor(message, code = 'audio_input_error') {
@@ -132,7 +136,7 @@ async function downloadAudioBuffer(url, {
   const contentLength = Number(response.headers.get('content-length') ?? 0);
 
   if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    throw new AudioInputError('Аудио слишком большое. Сейчас поддерживается до 2 МБ и примерно до 1 минуты.', 'audio_too_large');
+    throw new AudioInputError(`Аудио слишком большое. Сейчас поддерживается до ${formatMegabytes(maxBytes)} МБ.`, 'audio_too_large');
   }
 
   const contentType = normalizeContentType(
@@ -151,7 +155,7 @@ async function downloadAudioBuffer(url, {
   }
 
   if (buffer.length > maxBytes) {
-    throw new AudioInputError('Аудио слишком большое. Сейчас поддерживается до 2 МБ и примерно до 1 минуты.', 'audio_too_large');
+    throw new AudioInputError(`Аудио слишком большое. Сейчас поддерживается до ${formatMegabytes(maxBytes)} МБ.`, 'audio_too_large');
   }
 
   return {
@@ -185,7 +189,7 @@ export async function extractTelegramAudioInput(ctx, {
   }
 
   if (source.file_size && source.file_size > maxBytes) {
-    throw new AudioInputError('Аудио слишком большое. Сейчас поддерживается до 2 МБ и примерно до 1 минуты.', 'audio_too_large');
+    throw new AudioInputError(`Аудио слишком большое. Сейчас поддерживается до ${formatMegabytes(maxBytes)} МБ.`, 'audio_too_large');
   }
 
   const file = await ctx.api.getFile(source.file_id);
@@ -209,6 +213,7 @@ export async function extractTelegramAudioInput(ctx, {
     platform: 'telegram',
     fileId: source.file_id,
     filePath: file.file_path,
+    fileName: source.file_name ?? file.file_path.split('/').pop() ?? 'audio.ogg',
     durationSeconds: source.duration ?? null,
   };
 }
@@ -244,6 +249,7 @@ export async function extractMaxAudioInput(ctx, {
     ...audio,
     platform: 'max',
     url,
+    fileName: fileName || url.split('/').pop() || 'audio',
     token: audioAttachment.payload?.token ?? null,
   };
 }

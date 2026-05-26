@@ -50,6 +50,9 @@ CODEX_API_KEY=sk-clb-...
 CODEX_MODEL=gpt-5.3-codex
 CODEX_USE_RESPONSES=true
 CODEX_SESSION_FILE=data/codex-sessions.json
+CODEX_TRANSCRIPTION_MODEL=gpt-4o-transcribe
+AUDIO_MAX_BYTES=26214400
+AUDIO_TRANSCRIPTION_TIMEOUT_MS=120000
 
 ANTI_API_BASE_URL=http://127.0.0.1:8964
 ANTI_API_CLAUDE_MODEL=route:claude
@@ -61,6 +64,7 @@ GIGACHAT_SCOPE=GIGACHAT_API_PERS
 
 SALUTESPEECH_AUTH_KEY=base64_client_id_client_secret
 SALUTESPEECH_SCOPE=SALUTE_SPEECH_PERS
+SALUTESPEECH_MAX_AUDIO_BYTES=2097152
 ```
 
 ### Если ваш `g4f`-сервер использует backend API
@@ -134,7 +138,7 @@ npm run start:admin
 
 Telegram-бот использует те же команды и ту же логику квот, что и MAX-бот. Контекст и тарифы считаются отдельно для каждого Telegram-пользователя, а в группах контекст ведётся отдельно для каждого участника внутри чата.
 
-Голосовые и короткие аудиофайлы распознаются через SaluteSpeech REST `speech:recognize`, затем распознанный текст отправляется в активный режим. Синхронный REST-режим SaluteSpeech рассчитан на аудио до 2 МБ и примерно до 1 минуты; лучше всего подходят Telegram voice OGG/Opus, MP3, FLAC и WAV.
+Голосовые и аудиофайлы распознаются до отправки в активную модель. Короткие записи до `SALUTESPEECH_MAX_AUDIO_BYTES` идут через SaluteSpeech REST `speech:recognize`, а более длинные файлы до `AUDIO_MAX_BYTES` идут через `codex-lb` endpoint `/v1/audio/transcriptions` с моделью `CODEX_TRANSCRIPTION_MODEL`. Если `CODEX_TRANSCRIPTION_BASE_URL` и `CODEX_TRANSCRIPTION_API_KEY` не заданы, используются `CODEX_BASE_URL` и `CODEX_API_KEY`.
 
 Если включен `CODEX_USE_RESPONSES=true`, то для `codex-lb` бот использует `POST /v1/responses` и хранит `previous_response_id` по каждому чату в `CODEX_SESSION_FILE`. Это даёт настоящую continuity-сессию на стороне `codex-lb`, а не только локальную историю в памяти процесса.
 

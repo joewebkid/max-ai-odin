@@ -160,6 +160,19 @@ const antiApiBaseUrl = trimTrailingSlashes(
   (process.env.ANTI_API_BASE_URL ?? 'http://127.0.0.1:8964').trim() || 'http://127.0.0.1:8964',
 );
 const antiApiKey = (process.env.ANTI_API_API_KEY ?? '').trim();
+const audioMaxBytes = parsePositiveInt(process.env.AUDIO_MAX_BYTES, 25 * 1024 * 1024);
+const saluteSpeechMaxBytes = Math.min(
+  parsePositiveInt(process.env.SALUTESPEECH_MAX_AUDIO_BYTES, 2 * 1024 * 1024),
+  audioMaxBytes,
+);
+const codexTranscriptionBaseUrl = (
+  (process.env.CODEX_TRANSCRIPTION_BASE_URL ?? '').trim()
+  || (process.env.CODEX_BASE_URL ?? '').trim()
+);
+const codexTranscriptionApiKey = (
+  (process.env.CODEX_TRANSCRIPTION_API_KEY ?? '').trim()
+  || (process.env.CODEX_API_KEY ?? '').trim()
+);
 
 export const config = {
   maxBotToken: (process.env.MAX_BOT_TOKEN ?? '').trim(),
@@ -168,6 +181,14 @@ export const config = {
   systemPrompt: (process.env.SYSTEM_PROMPT ?? '').trim() || 'Ты полезный русскоязычный ассистент.',
   maxHistoryMessages: parsePositiveInt(process.env.MAX_HISTORY_MESSAGES, 12),
   requestTimeoutMs: parsePositiveInt(process.env.REQUEST_TIMEOUT_MS ?? process.env.G4F_TIMEOUT_MS, 60_000),
+  audioTranscriptionTimeoutMs: parsePositiveInt(
+    process.env.AUDIO_TRANSCRIPTION_TIMEOUT_MS,
+    parsePositiveInt(process.env.REQUEST_TIMEOUT_MS ?? process.env.G4F_TIMEOUT_MS, 60_000),
+  ),
+  audio: {
+    maxBytes: audioMaxBytes,
+    saluteSpeechMaxBytes,
+  },
   metricsFile: path.resolve(process.cwd(), (process.env.METRICS_FILE ?? 'data/bot-metrics.json').trim() || 'data/bot-metrics.json'),
   recentRequestsLimit: parsePositiveInt(process.env.RECENT_REQUESTS_LIMIT, 200),
   tokenCycleDays: parsePositiveInt(process.env.TOKEN_CYCLE_DAYS, 30),
@@ -186,6 +207,11 @@ export const config = {
     generatePath: '/generate',
     useResponses: true,
   }),
+  codexTranscription: {
+    baseUrl: trimTrailingSlashes(codexTranscriptionBaseUrl),
+    apiKey: codexTranscriptionApiKey,
+    transcriptionModel: (process.env.CODEX_TRANSCRIPTION_MODEL ?? '').trim() || 'gpt-4o-transcribe',
+  },
   antiClaude: {
     baseUrl: antiApiBaseUrl,
     mode: 'openai',
